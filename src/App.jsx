@@ -308,65 +308,279 @@ function ProgressBar({ current }) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// The app runs in two places: on lorette.ai, where /api/chat proxies the key
+// safely, and in a preview sandbox where that route doesn't exist. Try the
+// proxy first; if it 404s, fall back to calling the API directly.
+let useDirectApi = false;
+
+async function postMessages({ system, messages, maxTokens, stream }) {
+  if (!useDirectApi) {
+    try {
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system, messages, max_tokens: maxTokens, stream }),
+      });
+      // A real function replies with JSON or an event stream. Anything else
+      // (an HTML shell, a 404 page) means the route isn't there — checking
+      // headers doesn't consume the body, so the response stays usable.
+      const ct = resp.headers.get('content-type') || '';
+      const isOurApi = ct.includes('application/json') || ct.includes('text/event-stream');
+      // Only route around a genuinely absent endpoint. A 5xx means the
+      // function exists and failed — surface that rather than hiding it.
+      const routeMissing = resp.status === 404 || (!isOurApi && resp.status < 500);
+      if (!routeMissing) return { resp, via: 'proxy' };
+      useDirectApi = true;
+    } catch {
+      useDirectApi = true; // network-level failure reaching the route
+    }
+  }
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: maxTokens || 4000,
+      system,
+      messages,
+      ...(stream ? { stream: true } : {}),
+    }),
+  });
+  return { resp, via: 'direct' };
+}
+
+// The browser has no API key of its own. If the direct path is rejected for
+// auth, the real problem is that the server route never answered.
+function describeAuthFailure(via) {
+  return via === 'direct'
+    ? "The /api/chat route isn't responding, so the browser tried to reach the API on its own and was refused. Check that api/chat.js deployed and ANTHROPIC_API_KEY is set in Vercel."
+    : "The API key is missing or invalid on the server.";
+}
+
+const SYSTEM_PROMPT = "You are a bachelorette weekend planning expert. Always respond with valid JSON only. No markdown, no backticks, no explanation — just the raw JSON.";
+
+// A response can arrive as a normal message object, as a server-sent event
+// stream delivered in one piece, or as bare text. Pull the model's words out
+// of whichever shape showed up instead of assuming one.
+function extractText(bodyText) {
+  if (!bodyText || !bodyText.trim()) return { text: "" };
+
+  try {
+    const data = JSON.parse(bodyText);
+    if (data?.error) return { error: data.error };
+    if (Array.isArray(data?.content)) {
+      return {
+        text: data.content.filter(b => b.type === "text").map(b => b.text).join(""),
+        stopReason: data.stop_reason || null,
+      };
+    }
+  } catch { /* not a plain message object — keep going */ }
+
+  if (/(^|\n)\s*data:\s*\{/.test(bodyText)) {
+    let text = "", stopReason = null, err = null, sawEvent = false;
+    for (const line of bodyText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const evt = JSON.parse(payload);
+        sawEvent = true;
+        if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") text += evt.delta.text;
+        else if (evt.type === "message_delta" && evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
+        else if (evt.type === "error") err = evt.error;
+      } catch { /* skip a partial event line */ }
+    }
+    if (err) return { error: err };
+    // Return even with no text — a lone stop_reason still tells us why
+    if (sawEvent) return { text, stopReason };
+  }
+
+  return { text: bodyText };
+}
+
+// Parses incomplete JSON mid-stream by closing the structure at the last
+// point it was valid — lets the UI render the plan as it arrives.
+function parsePartialJSON(raw) {
+  if (!raw) return null;
+  let s = raw.replace(/```json/gi, "").replace(/```/g, "");
+  const starts = [s.indexOf("{"), s.indexOf("[")].filter(i => i !== -1);
+  if (!starts.length) return null;
+  s = s.slice(Math.min(...starts));
+
+  try { return JSON.parse(s); } catch {}
+
+  const cuts = [], stacks = [], stack = [];
+  let inStr = false, esc = false;
+  const mark = (i) => { cuts.push(i); stacks.push(stack.slice()); };
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') { inStr = false; mark(i + 1); }
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{") { stack.push("}"); continue; }
+    if (c === "[") { stack.push("]"); continue; }
+    if (c === "}" || c === "]") { stack.pop(); mark(i + 1); continue; }
+    if (c === ",") { mark(i); continue; }
+    if (/[0-9]/.test(c)) {
+      const n = s[i + 1];
+      if (!n || !/[0-9.eE+-]/.test(n)) mark(i + 1);
+      continue;
+    }
+    if (c === "e" || c === "l") {
+      if (/(true|false|null)$/.test(s.slice(Math.max(0, i - 4), i + 1))) mark(i + 1);
+    }
+  }
+
+  if (inStr && !esc) {
+    try { return JSON.parse(s + '"' + stack.slice().reverse().join("")); } catch {}
+  }
+  const limit = Math.max(0, cuts.length - 60);
+  for (let k = cuts.length - 1; k >= limit; k--) {
+    const head = s.slice(0, cuts[k]).replace(/[,:\s]*$/, "");
+    try { return JSON.parse(head + stacks[k].slice().reverse().join("")); } catch {}
+  }
+  try { return JSON.parse(s.replace(/[,:\s]*$/, "") + stack.slice().reverse().join("")); } catch {}
+  return null;
+}
+
+// Streams a response, calling onPartial with the plan-so-far as it builds.
+// Falls back to the plain request if streaming isn't available.
+async function callClaudeStreaming(prompt, { maxTokens = 4000, onPartial } = {}) {
+  // Streaming is a progressive-rendering nicety, and only the server proxy is
+  // known to support it. On the direct path, take the plain request instead.
+  if (useDirectApi) throw new Error("STREAM_UNSUPPORTED");
+
+  const { resp, via } = await postMessages({
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: prompt }],
+    maxTokens,
+    stream: true,
+  });
+
+  // postMessages may have discovered the proxy is absent and gone direct —
+  // that path isn't known to stream, so hand back to the plain request.
+  if (via === 'direct') throw new Error("STREAM_UNSUPPORTED");
+
+  if (!resp.ok) {
+    const bodyText = await resp.text();
+    if (resp.status === 401 || resp.status === 403) throw new Error(describeAuthFailure(via));
+    let detail = {};
+    try { detail = JSON.parse(bodyText); }
+    catch {
+      if (resp.status === 504 || /timed?.?out|FUNCTION_INVOCATION_TIMEOUT/i.test(bodyText)) {
+        throw new Error("The request timed out on the server. Set maxDuration in api/chat.js.");
+      }
+      const snippet = bodyText.replace(/\s+/g, " ").trim().slice(0, 120) || "(empty body)";
+      throw new Error(`Got ${resp.status} via ${via} but not data. Response began: ${snippet}`);
+    }
+    const raw = detail?.error?.message || `Request failed (${resp.status})`;
+    if (/credit|balance|quota/i.test(raw)) throw new Error("Out of API credit. Add credits at console.anthropic.com.");
+    if (/api.?key|authentication|unauthorized/i.test(raw)) throw new Error("The API key is missing or invalid in Vercel.");
+    const retryable = resp.status === 429 || resp.status >= 500 || /overload|rate.?limit/i.test(raw);
+    throw new Error(retryable ? "Claude is busy right now." : raw);
+  }
+  if (!resp.body?.getReader) throw new Error("STREAM_UNSUPPORTED");
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "", text = "", stopReason = null, lastEmit = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let evt;
+      try { evt = JSON.parse(payload); } catch { continue; }
+      if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+        text += evt.delta.text;
+      } else if (evt.type === "message_delta" && evt.delta?.stop_reason) {
+        stopReason = evt.delta.stop_reason;
+      } else if (evt.type === "error") {
+        throw new Error(evt.error?.message || "Stream error");
+      }
+    }
+
+    // Repaint at most ~8x/sec so long plans don't thrash the DOM
+    if (onPartial && Date.now() - lastEmit > 120) {
+      const partial = parsePartialJSON(text);
+      if (partial) onPartial(partial);
+      lastEmit = Date.now();
+    }
+  }
+
+  if (stopReason === "max_tokens") {
+    throw new Error("The plan ran longer than the space allowed. Try a shorter trip or fewer picks.");
+  }
+  if (!text.trim()) throw new Error("Claude sent back an empty response.");
+
+  const final = parsePartialJSON(text);
+  if (!final) throw new Error("Claude's answer wasn't in the expected format.");
+  return final;
+}
+
 async function callClaude(prompt, { maxTokens = 4000, retries = 2 } = {}) {
   let lastError = new Error("Request failed");
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     let retryable = false;
     try {
-      const resp = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system: "You are a bachelorette weekend planning expert. Always respond with valid JSON only. No markdown, no backticks, no explanation — just the raw JSON.",
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: maxTokens,
-        }),
+      const { resp, via } = await postMessages({
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens,
       });
 
-      let data;
-      try { data = await resp.json(); }
-      catch { throw new Error("The server sent back something unreadable."); }
+      const bodyText = await resp.text();
 
-      // API-level failure — surface Anthropic's actual reason
-      if (!resp.ok || data?.error) {
-        const raw = data?.error?.message || `Request failed (${resp.status})`;
+      // Timeouts and error shells never parse — catch them before anything else
+      if (resp.status === 504 || /FUNCTION_INVOCATION_TIMEOUT/i.test(bodyText)) {
+        throw new Error("The request timed out on the server. Set maxDuration in api/chat.js.");
+      }
+
+      const { text, stopReason, error } = extractText(bodyText);
+
+      // API-level failure — surface the actual reason
+      if (!resp.ok || error) {
+        if (resp.status === 401 || resp.status === 403) {
+          throw new Error(describeAuthFailure(via));
+        }
+        const raw = error?.message
+          || bodyText.replace(/\s+/g, " ").trim().slice(0, 100)
+          || `Request failed (${resp.status})`;
         retryable = resp.status === 429 || resp.status >= 500 || /overload|rate.?limit/i.test(raw);
         if (/credit|balance|quota/i.test(raw)) {
           throw new Error("Out of API credit. Add credits at console.anthropic.com.");
         }
-        if (/api.?key|authentication|unauthorized/i.test(raw)) {
-          throw new Error("The API key is missing or invalid in Vercel.");
-        }
-        throw new Error(retryable ? "Claude is busy right now." : raw);
+        throw new Error(retryable ? "Claude is busy right now." : `${resp.status} via ${via}: ${raw}`);
       }
 
-      // Cut off mid-sentence because the answer outgrew the token budget
-      if (data.stop_reason === 'max_tokens') {
-        throw new Error("The plan ran longer than the space allowed. Try a shorter trip or fewer picks.");
+      if (stopReason === "max_tokens") {
+        throw new Error("The answer ran longer than the space allowed. Try a shorter trip or fewer picks.");
       }
+      if (!text || !text.trim()) throw new Error("Claude sent back an empty response.");
 
-      const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') || '';
-      if (!text.trim()) throw new Error("Claude sent back an empty response.");
-
-      const clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const firstChar = clean.indexOf('[') !== -1 && (clean.indexOf('{') === -1 || clean.indexOf('[') < clean.indexOf('{')) ? '[' : '{';
-      const lastChar = firstChar === '[' ? ']' : '}';
-      const start = clean.indexOf(firstChar);
-      const end = clean.lastIndexOf(lastChar);
-      if (start === -1 || end === -1 || end < start) {
-        // Usually a garbled or half-finished answer — worth one more shot
+      // parsePartialJSON handles complete JSON, fenced JSON, leading prose,
+      // and answers that were cut off — all in one path.
+      const parsed = parsePartialJSON(text);
+      if (parsed === null) {
         retryable = true;
-        throw new Error("Claude's answer wasn't in the expected format.");
+        const snippet = text.replace(/\s+/g, " ").trim().slice(0, 100) || "(empty)";
+        throw new Error(`Couldn't read the answer. It began: ${snippet}`);
       }
-
-      try {
-        return JSON.parse(clean.slice(start, end + 1));
-      } catch {
-        // Malformed JSON is often a one-off; a retry usually lands clean
-        retryable = true;
-        throw new Error("Claude's answer came back malformed.");
-      }
+      return parsed;
     } catch (e) {
       lastError = e;
       if (!retryable || attempt === retries) break;
@@ -384,7 +598,12 @@ export default function App() {
   const [details, setDetails] = useState({ brideName:"", startDate:"", endDate:"", groupSize:"", budget:"moderate", notes:"" });
   const [explore, setExplore] = useState({ dining:[], bars:[], stay:[], activities:[] });
   const [activeTab, setActiveTab] = useState("dining");
-  const [loadingTab, setLoadingTab] = useState(null);
+  const [loadingTabs, setLoadingTabs] = useState({});
+  const [tabErrors, setTabErrors] = useState({});
+  const loadedRef = useRef({});
+  const inFlightRef = useRef({});
+  const cityRef = useRef("");
+  const reqIdRef = useRef({});
   const [starFilter, setStarFilter] = useState([]);
   const [priceFilter, setPriceFilter] = useState([]);
   const [selected, setSelected] = useState({ dining:[], bars:[], stay:[], activities:[] });
@@ -397,29 +616,91 @@ export default function App() {
   const [sent, setSent] = useState(false);
 
   async function fetchTab(tab, targetCity) {
-    setLoadingTab(tab);
+    const forCity = targetCity || cityRef.current || city;
+    if (!forCity) return; // nothing to search for yet
+
+    // One request per tab at a time. Clicking a tab the background loader is
+    // already fetching used to start a duplicate, and whichever finished last
+    // won — so a rate-limited retry could blank a tab that had just loaded.
+    if (inFlightRef.current[tab]) return inFlightRef.current[tab];
+
+    // Token per request. Only the newest one for a tab may touch state, which
+    // means a superseded response can't clobber results or strand a spinner.
+    const myId = (reqIdRef.current[tab] || 0) + 1;
+    reqIdRef.current[tab] = myId;
+    const isCurrent = () => reqIdRef.current[tab] === myId;
+
     const cat = TAB_CLAUDE[tab];
-    try {
-      const result = await callClaude(`Give me 6 real ${cat} recommendations for a bachelorette weekend in ${targetCity||city}. Return a JSON array. Each object: name, description (1-2 sentences), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry. Return only the JSON array.`);
-      setExplore(prev => ({ ...prev, [tab]: Array.isArray(result) ? result : [] }));
-    } catch(e) { setExplore(prev => ({ ...prev, [tab]: [] })); }
-    setLoadingTab(null);
+    const run = (async () => {
+      setLoadingTabs(prev => ({ ...prev, [tab]: true }));
+      setTabErrors(prev => ({ ...prev, [tab]: "" }));
+      try {
+        const result = await callClaude(
+          `Give me 6 real ${cat} recommendations for a bachelorette weekend in ${forCity}. Return a JSON array. Each object: name, description (one short sentence, under 20 words), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array.`,
+          { maxTokens: 2000 }
+        );
+        if (!isCurrent()) return;
+        if (!Array.isArray(result) || result.length === 0) {
+          throw new Error("No places came back for this one.");
+        }
+        setExplore(prev => ({ ...prev, [tab]: result }));
+        loadedRef.current[tab] = true;
+      } catch(e) {
+        if (!isCurrent()) return;
+        setExplore(prev => ({ ...prev, [tab]: [] }));
+        setTabErrors(prev => ({ ...prev, [tab]: e.message || "Couldn't load these." }));
+      } finally {
+        // Always release the spinner for the newest request, whatever happened
+        if (isCurrent()) setLoadingTabs(prev => ({ ...prev, [tab]: false }));
+        if (inFlightRef.current[tab] === run) delete inFlightRef.current[tab];
+      }
+    })();
+
+    inFlightRef.current[tab] = run;
+    return run;
+  }
+
+  // Every path into a city goes through here — typing one in, or tapping a
+  // popular-destination chip. Bypassing it left refs unset and stranded a spinner.
+  function startCity(c) {
+    if (!c) return;
+    if (c !== cityRef.current) {
+      setExplore({ dining:[], bars:[], stay:[], activities:[] });
+      setSelected({ dining:[], bars:[], stay:[], activities:[] });
+      setTabErrors({});
+      setItinerary(null);
+      setItinError("");
+      setActiveTab("dining");
+      loadedRef.current = {};
+      inFlightRef.current = {};
+      // Invalidate anything still in flight for the old city
+      for (const t of TABS) reqIdRef.current[t] = (reqIdRef.current[t] || 0) + 1;
+    }
+    cityRef.current = c;
+    setCityInput(c);
+    setCity(c);
+    setStep("details");
   }
 
   async function handleCitySubmit() {
     if (!cityInput.trim()) return;
-    const c = cityInput.trim();
-    setCity(c); setStep("details");
+    startCity(cityInput.trim());
   }
 
   async function handleDetailsSubmit() {
     setStep("explore");
-    await fetchTab("dining", city);
+    // Dining first so there's something on screen fast, then the rest one at
+    // a time in the background. Firing all four at once trips API rate limits.
+    for (const t of TABS) {
+      if (!loadedRef.current[t]) await fetchTab(t, cityRef.current);
+    }
   }
 
   async function handleTabChange(tab) {
     setActiveTab(tab);
-    if (!explore[tab]?.length) await fetchTab(tab);
+    // fetchTab dedupes, so clicking a tab the loader is already on just
+    // waits on the request already in flight instead of starting a second.
+    if (!loadedRef.current[tab]) fetchTab(tab, cityRef.current);
   }
 
   function toggleSelect(tab, item) {
@@ -465,18 +746,41 @@ Respond with a single JSON object and nothing else, using exactly these keys:
 
 {"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}`;
 
+    const budget = Math.min(8000, 3000 + (dayCount || 2) * 900);
     try {
-      const result = await callClaude(prompt, {
-        // longer trips need more room; a 5-day plan won't fit in a 2-day budget
-        maxTokens: Math.min(8000, 3000 + (dayCount || 2) * 900),
+      let sawPartial = false;
+      const result = await callClaudeStreaming(prompt, {
+        maxTokens: budget,
+        onPartial: (partial) => {
+          // Show the plan building itself rather than a spinner
+          if (partial.title || partial.days?.length) {
+            sawPartial = true;
+            setLoadingItin(false);
+            setItinerary(partial);
+          }
+        },
       });
       if (result && Array.isArray(result.days) && result.days.length > 0) {
         setItinerary(result);
       } else {
+        setItinerary(null);
         setItinError("Claude sent back a plan with no days in it.");
       }
     } catch(e) {
-      setItinError(e.message || "Something went wrong.");
+      if (e.message === "STREAM_UNSUPPORTED") {
+        // Browser or host can't stream — fall back to the blocking request
+        try {
+          const result = await callClaude(prompt, { maxTokens: budget });
+          if (result && Array.isArray(result.days) && result.days.length > 0) setItinerary(result);
+          else setItinError("Claude sent back a plan with no days in it.");
+        } catch (inner) {
+          setItinerary(null);
+          setItinError(inner.message || "Something went wrong.");
+        }
+      } else {
+        setItinerary(null);
+        setItinError(e.message || "Something went wrong.");
+      }
     }
     setLoadingItin(false);
   }
@@ -1005,7 +1309,7 @@ Respond with a single JSON object and nothing else, using exactly these keys:
               <p className="dest-label">Popular weekends</p>
               <div className="dest-chips">
                 {["Nashville","Miami","New Orleans","Scottsdale","Austin","Charleston"].map(c => (
-                  <button key={c} className="dest-chip" onClick={() => { setCityInput(c); setCity(c); setStep("details"); }}>
+                  <button key={c} className="dest-chip" onClick={() => startCity(c)}>
                     {c}
                   </button>
                 ))}
@@ -1103,10 +1407,26 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                 ))}
               </div>
 
-              {loadingTab===activeTab ? <Spinner /> : filtered(activeTab).length===0 ? (
+              {loadingTabs[activeTab] ? <Spinner /> : filtered(activeTab).length===0 ? (
                 <div className="empty">
-                  <p style={{fontSize:"2rem"}}>🔍</p>
-                  <p>No results — try adjusting filters.</p>
+                  {tabErrors[activeTab] ? (
+                    <>
+                      <p style={{fontWeight:700,color:"var(--ink)",marginBottom:"0.4rem"}}>
+                        Couldn't load {TAB_LABELS[activeTab].toLowerCase()}
+                      </p>
+                      <p style={{marginBottom:"1.25rem"}}>{tabErrors[activeTab]}</p>
+                      <button className="btn btn-grad" onClick={() => {
+                        delete inFlightRef.current[activeTab];
+                        fetchTab(activeTab, cityRef.current);
+                      }}>
+                        Try again
+                      </button>
+                    </>
+                  ) : explore[activeTab]?.length > 0 ? (
+                    <p>Nothing matches those filters.</p>
+                  ) : (
+                    <p>No places found here yet.</p>
+                  )}
                 </div>
               ) : (
                 <div className="vgrid">
@@ -1327,6 +1647,12 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                     setExplore({dining:[],bars:[],stay:[],activities:[]});
                     setSelected({dining:[],bars:[],stay:[],activities:[]});
                     setItinerary(null); setEmailPreview(null); setSent(false); setEmails("");
+                    setTabErrors({}); setItinError(""); setActiveTab("dining");
+                    // Without this the next trip thinks every tab is already loaded
+                    cityRef.current = "";
+                    loadedRef.current = {};
+                    inFlightRef.current = {};
+                    for (const t of TABS) reqIdRef.current[t] = (reqIdRef.current[t] || 0) + 1;
                   }}>Plan another weekend</button>
                 </div>
               )}
