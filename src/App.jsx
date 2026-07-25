@@ -306,24 +306,75 @@ function ProgressBar({ current }) {
   );
 }
 
-async function callClaude(prompt) {
-  const resp = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system: "You are a bachelorette weekend planning expert. Always respond with valid JSON only. No markdown, no backticks, no explanation — just the raw JSON.",
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  const data = await resp.json();
-  const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') || '';
-  const clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-  const firstChar = clean.indexOf('[') !== -1 && (clean.indexOf('{') === -1 || clean.indexOf('[') < clean.indexOf('{')) ? '[' : '{';
-  const lastChar = firstChar === '[' ? ']' : '}';
-  const start = clean.indexOf(firstChar);
-  const end = clean.lastIndexOf(lastChar);
-  if (start === -1 || end === -1) throw new Error('No JSON found');
-  return JSON.parse(clean.slice(start, end + 1));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function callClaude(prompt, { maxTokens = 4000, retries = 2 } = {}) {
+  let lastError = new Error("Request failed");
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    let retryable = false;
+    try {
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system: "You are a bachelorette weekend planning expert. Always respond with valid JSON only. No markdown, no backticks, no explanation — just the raw JSON.",
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: maxTokens,
+        }),
+      });
+
+      let data;
+      try { data = await resp.json(); }
+      catch { throw new Error("The server sent back something unreadable."); }
+
+      // API-level failure — surface Anthropic's actual reason
+      if (!resp.ok || data?.error) {
+        const raw = data?.error?.message || `Request failed (${resp.status})`;
+        retryable = resp.status === 429 || resp.status >= 500 || /overload|rate.?limit/i.test(raw);
+        if (/credit|balance|quota/i.test(raw)) {
+          throw new Error("Out of API credit. Add credits at console.anthropic.com.");
+        }
+        if (/api.?key|authentication|unauthorized/i.test(raw)) {
+          throw new Error("The API key is missing or invalid in Vercel.");
+        }
+        throw new Error(retryable ? "Claude is busy right now." : raw);
+      }
+
+      // Cut off mid-sentence because the answer outgrew the token budget
+      if (data.stop_reason === 'max_tokens') {
+        throw new Error("The plan ran longer than the space allowed. Try a shorter trip or fewer picks.");
+      }
+
+      const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') || '';
+      if (!text.trim()) throw new Error("Claude sent back an empty response.");
+
+      const clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const firstChar = clean.indexOf('[') !== -1 && (clean.indexOf('{') === -1 || clean.indexOf('[') < clean.indexOf('{')) ? '[' : '{';
+      const lastChar = firstChar === '[' ? ']' : '}';
+      const start = clean.indexOf(firstChar);
+      const end = clean.lastIndexOf(lastChar);
+      if (start === -1 || end === -1 || end < start) {
+        // Usually a garbled or half-finished answer — worth one more shot
+        retryable = true;
+        throw new Error("Claude's answer wasn't in the expected format.");
+      }
+
+      try {
+        return JSON.parse(clean.slice(start, end + 1));
+      } catch {
+        // Malformed JSON is often a one-off; a retry usually lands clean
+        retryable = true;
+        throw new Error("Claude's answer came back malformed.");
+      }
+    } catch (e) {
+      lastError = e;
+      if (!retryable || attempt === retries) break;
+      await sleep(600 * (attempt + 1));
+    }
+  }
+
+  throw lastError;
 }
 
 export default function App() {
@@ -339,7 +390,7 @@ export default function App() {
   const [selected, setSelected] = useState({ dining:[], bars:[], stay:[], activities:[] });
   const [itinerary, setItinerary] = useState(null);
   const [loadingItin, setLoadingItin] = useState(false);
-  const [itinError, setItinError] = useState(false);
+  const [itinError, setItinError] = useState("");
   const [emails, setEmails] = useState("");
   const [emailPreview, setEmailPreview] = useState(null);
   const [loadingEmail, setLoadingEmail] = useState(false);
@@ -383,7 +434,7 @@ export default function App() {
 
   async function buildItinerary() {
     setLoadingItin(true);
-    setItinError(false);
+    setItinError("");
     setStep("itinerary");
     const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${i.name} (${cat})`));
     const venueList = picks.length > 0 ? picks.join(", ") : `none selected — choose great real spots in ${city} yourself`;
@@ -415,14 +466,17 @@ Respond with a single JSON object and nothing else, using exactly these keys:
 {"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}`;
 
     try {
-      const result = await callClaude(prompt);
-      if (result && result.days && result.days.length > 0) {
+      const result = await callClaude(prompt, {
+        // longer trips need more room; a 5-day plan won't fit in a 2-day budget
+        maxTokens: Math.min(8000, 3000 + (dayCount || 2) * 900),
+      });
+      if (result && Array.isArray(result.days) && result.days.length > 0) {
         setItinerary(result);
       } else {
-        setItinError(true);
+        setItinError("Claude sent back a plan with no days in it.");
       }
     } catch(e) {
-      setItinError(true);
+      setItinError(e.message || "Something went wrong.");
     }
     setLoadingItin(false);
   }
@@ -1112,9 +1166,10 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                 </div>
               ) : itinError ? (
                 <div style={{textAlign:"center",padding:"3rem 1rem"}}>
-                  <p style={{fontSize:"2rem",marginBottom:"1rem"}}>⚠️</p>
-                  <p style={{fontWeight:700,fontSize:"1.1rem",marginBottom:"0.5rem",color:"var(--ink)"}}>Something went wrong</p>
-                  <p style={{color:"var(--muted)",fontSize:"0.88rem",marginBottom:"2rem"}}>The plan didn't load correctly. Try again.</p>
+                  <p style={{fontWeight:700,fontSize:"1.15rem",marginBottom:"0.5rem",color:"var(--ink)"}}>The plan didn't come through</p>
+                  <p style={{color:"var(--muted)",fontSize:"0.88rem",marginBottom:"2rem",maxWidth:"380px",marginLeft:"auto",marginRight:"auto",lineHeight:1.6}}>
+                    {itinError}
+                  </p>
                   <div className="arow" style={{justifyContent:"center"}}>
                     <button className="btn btn-ghost" onClick={()=>setStep("explore")}>
                       <ArrowLeft size={14} strokeWidth={2} /> Edit picks
