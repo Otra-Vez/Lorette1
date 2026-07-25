@@ -13,7 +13,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 3000,
+        max_tokens: 4000,
         system,
         messages,
       }),
@@ -21,6 +21,6 @@ export default async function handler(req, res) {
     const data = await response.json();
     res.status(200).json(data);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to reach AI' });
+    res.status(500).json({ error: error.message });
   }
 }
