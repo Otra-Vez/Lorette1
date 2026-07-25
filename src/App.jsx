@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { MapPin, Check, ArrowLeft, ChevronRight, Utensils, Wine, Building2, Compass, Sparkles } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { MapPin, Check, ArrowLeft, ChevronRight, ChevronLeft, Calendar, Utensils, Wine, Building2, Compass, Sparkles } from "lucide-react";
 
 const STEPS = ["destination", "details", "explore", "itinerary", "invites"];
 const STEP_LABELS = { destination: "Destination", details: "Weekend", explore: "Explore", itinerary: "Plan", invites: "Invite" };
@@ -28,6 +28,188 @@ function describeDates(startDate, endDate) {
   );
   const nightLabel = nights === 1 ? "1 night" : `${nights} nights`;
   return `${fmt(startDate)} through ${fmt(endDate)} (${nights + 1} days, ${nightLabel})`;
+}
+
+// ── DATE RANGE PICKER ────────────────────────────────────────────────────────
+// One field, one calendar. First tap sets arrival, second sets departure —
+// the way a hotel booking widget behaves.
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DOW = ["S","M","T","W","T","F","S"];
+
+// All date math is on local calendar days, never timestamps, so a timezone
+// offset can't shift May 15 into May 14.
+function toISO(d) {
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+function fromISO(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function shortLabel(iso) {
+  const d = fromISO(iso);
+  return `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`;
+}
+function nightsBetween(a, b) {
+  return Math.round((fromISO(b) - fromISO(a)) / 86400000);
+}
+
+function DateRangeField({ startDate, endDate, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(null);
+  const todayISO = toISO(new Date());
+  const [view, setView] = useState(() => {
+    const base = startDate ? fromISO(startDate) : new Date();
+    return new Date(base.getFullYear(), base.getMonth(), 1);
+  });
+  const wrapRef = useRef(null);
+
+  // close on outside tap or Escape
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  function pick(iso) {
+    // no range yet, or a complete range → start a fresh one
+    if (!startDate || (startDate && endDate)) {
+      onChange({ startDate: iso, endDate: "" });
+      setHover(null);
+      return;
+    }
+    // half-open range: earlier tap replaces the start, later tap closes it
+    if (iso < startDate) {
+      onChange({ startDate: iso, endDate: "" });
+      return;
+    }
+    onChange({ startDate, endDate: iso });
+    setHover(null);
+    setOpen(false);
+  }
+
+  const monthStart = new Date(view.getFullYear(), view.getMonth(), 1);
+  const daysInMonth = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+  const lead = monthStart.getDay();
+  const cells = [
+    ...Array(lead).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => new Date(view.getFullYear(), view.getMonth(), i + 1)),
+  ];
+
+  // preview the range as the finger/cursor moves before the second tap
+  const previewEnd = !endDate && startDate && hover && hover > startDate ? hover : endDate;
+  const atCurrentMonth =
+    view.getFullYear() === new Date().getFullYear() && view.getMonth() === new Date().getMonth();
+
+  const nights = startDate && endDate ? nightsBetween(startDate, endDate) : 0;
+
+  let label = "Add dates";
+  if (startDate && endDate) label = `${shortLabel(startDate)} – ${shortLabel(endDate)}`;
+  else if (startDate) label = `${shortLabel(startDate)} – Add return`;
+
+  return (
+    <div className="dr-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className={`dr-trigger ${!startDate ? "dr-empty" : ""}`}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Calendar size={15} strokeWidth={1.9} />
+        <span className="dr-label">{label}</span>
+        {nights > 0 && <span className="dr-nights">{nights} {nights === 1 ? "night" : "nights"}</span>}
+      </button>
+
+      {open && (
+        <div className="dr-pop">
+          <div className="dr-head">
+            <button
+              type="button"
+              className="dr-nav"
+              disabled={atCurrentMonth}
+              onClick={() => setView(v => new Date(v.getFullYear(), v.getMonth() - 1, 1))}
+              aria-label="Previous month"
+            >
+              <ChevronLeft size={16} strokeWidth={2.2} />
+            </button>
+            <div className="dr-month">{MONTHS[view.getMonth()]} {view.getFullYear()}</div>
+            <button
+              type="button"
+              className="dr-nav"
+              onClick={() => setView(v => new Date(v.getFullYear(), v.getMonth() + 1, 1))}
+              aria-label="Next month"
+            >
+              <ChevronRight size={16} strokeWidth={2.2} />
+            </button>
+          </div>
+
+          <div className="dr-dow">
+            {DOW.map((d, i) => <span key={i}>{d}</span>)}
+          </div>
+
+          <div className="dr-grid" onMouseLeave={() => setHover(null)}>
+            {cells.map((d, i) => {
+              if (!d) return <span key={i} className="dr-cell dr-blank" />;
+              const iso = toISO(d);
+              const past = iso < todayISO;
+              const isStart = iso === startDate;
+              const isEnd = iso === endDate;
+              const inRange = startDate && previewEnd && iso > startDate && iso < previewEnd;
+              const cls = [
+                "dr-cell",
+                "dr-day",
+                past ? "is-past" : "",
+                isStart ? "is-start" : "",
+                isEnd ? "is-end" : "",
+                inRange ? "is-between" : "",
+                iso === todayISO ? "is-today" : "",
+              ].filter(Boolean).join(" ");
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  className={cls}
+                  disabled={past}
+                  onMouseEnter={() => !past && setHover(iso)}
+                  onClick={() => pick(iso)}
+                >
+                  {d.getDate()}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="dr-foot">
+            <span className="dr-hint">
+              {!startDate ? "Pick your arrival day"
+                : !endDate ? "Now pick when you leave"
+                : describeDates(startDate, endDate)}
+            </span>
+            {(startDate || endDate) && (
+              <button
+                type="button"
+                className="dr-clear"
+                onClick={() => { onChange({ startDate: "", endDate: "" }); setHover(null); }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Spinner() {
@@ -361,6 +543,92 @@ Respond with a single JSON object and nothing else, using exactly these keys:
         textarea.input { resize:vertical; min-height:78px; }
         @media(max-width:500px){ .g2 { grid-template-columns:1fr; } }
 
+        /* ── DATE RANGE PICKER ── */
+        .dr-wrap { position:relative; }
+        .dr-trigger {
+          width:100%; display:flex; align-items:center; gap:0.55rem;
+          padding:0.72rem 1rem;
+          border:1.5px solid var(--border); border-radius:12px;
+          background:var(--bg); color:var(--ink);
+          font-family:'Plus Jakarta Sans',sans-serif;
+          font-size:0.92rem; font-weight:600;
+          cursor:pointer; text-align:left;
+          transition:border-color 0.18s, box-shadow 0.18s;
+        }
+        .dr-trigger:hover { border-color:rgba(124,58,237,0.35); }
+        .dr-trigger:focus-visible { outline:none; border-color:var(--violet); box-shadow:0 0 0 3px rgba(124,58,237,0.1); }
+        .dr-trigger svg { color:var(--violet); flex-shrink:0; }
+        .dr-empty { color:var(--muted); font-weight:400; }
+        .dr-empty svg { color:var(--muted); }
+        .dr-label { flex:1; }
+        .dr-nights {
+          font-size:0.72rem; font-weight:700;
+          background:rgba(124,58,237,0.08); color:var(--violet);
+          border-radius:50px; padding:0.18rem 0.6rem;
+        }
+
+        .dr-pop {
+          position:absolute; z-index:50;
+          top:calc(100% + 0.5rem); left:0;
+          width:min(340px, calc(100vw - 2.5rem));
+          background:var(--bg);
+          border:1.5px solid var(--border); border-radius:18px;
+          box-shadow:var(--shadow-lg);
+          padding:1rem 1rem 0.85rem;
+        }
+        .dr-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem; }
+        .dr-month { font-family:'Bricolage Grotesque',sans-serif; font-weight:700; font-size:1rem; letter-spacing:-0.01em; }
+        .dr-nav {
+          width:30px; height:30px; border-radius:50%;
+          border:1.5px solid var(--border); background:var(--bg);
+          display:flex; align-items:center; justify-content:center;
+          cursor:pointer; color:var(--ink); transition:all 0.15s;
+        }
+        .dr-nav:hover:not(:disabled) { border-color:var(--violet); color:var(--violet); }
+        .dr-nav:disabled { opacity:0.25; cursor:not-allowed; }
+
+        .dr-dow, .dr-grid { display:grid; grid-template-columns:repeat(7,1fr); }
+        .dr-dow { margin-bottom:0.3rem; }
+        .dr-dow span {
+          text-align:center; font-size:0.65rem; font-weight:700;
+          color:var(--muted); letter-spacing:0.04em; padding:0.2rem 0;
+        }
+        .dr-grid { row-gap:2px; }
+        .dr-cell { aspect-ratio:1; border:none; background:transparent; }
+        .dr-day {
+          font-family:'Plus Jakarta Sans',sans-serif;
+          font-size:0.82rem; font-weight:600;
+          color:var(--ink); cursor:pointer;
+          border-radius:50%;
+          transition:background 0.12s, color 0.12s;
+          display:flex; align-items:center; justify-content:center;
+        }
+        .dr-day:hover:not(:disabled):not(.is-start):not(.is-end) { background:rgba(124,58,237,0.1); }
+        .dr-day.is-past { color:var(--border); cursor:not-allowed; }
+        .dr-day.is-today { text-decoration:underline; text-underline-offset:3px; }
+        .dr-day.is-between { background:rgba(124,58,237,0.09); border-radius:0; }
+        .dr-day.is-start, .dr-day.is-end {
+          background:linear-gradient(135deg,#FF3CAC,#7C3AED);
+          color:#fff;
+        }
+        .dr-day.is-start { border-radius:50% 0 0 50%; }
+        .dr-day.is-end { border-radius:0 50% 50% 0; }
+        .dr-day.is-start.is-end { border-radius:50%; }
+
+        .dr-foot {
+          display:flex; align-items:center; justify-content:space-between; gap:0.5rem;
+          margin-top:0.7rem; padding-top:0.7rem;
+          border-top:1px solid var(--border);
+        }
+        .dr-hint { font-size:0.7rem; color:var(--muted); font-weight:500; line-height:1.35; }
+        .dr-clear {
+          font-family:'Plus Jakarta Sans',sans-serif;
+          font-size:0.7rem; font-weight:700;
+          color:var(--pink); background:none; border:none;
+          cursor:pointer; padding:0.2rem 0.1rem; flex-shrink:0;
+        }
+        .dr-clear:hover { text-decoration:underline; }
+
         /* ── BUTTONS ── */
         .btn {
           display:inline-flex; align-items:center; gap:0.4rem;
@@ -584,53 +852,26 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                   <input className="input" placeholder="e.g. Jess" value={details.brideName} onChange={e => setDetails(p=>({...p,brideName:e.target.value}))} />
                 </div>
                 <div className="ig">
-                  <label className="il">Arrive</label>
-                  <input
-                    className="input"
-                    type="date"
-                    value={details.startDate}
-                    onChange={e => setDetails(p => {
-                      const startDate = e.target.value;
-                      // keep the range valid if the new start is after the current end
-                      const endDate = p.endDate && startDate && p.endDate < startDate ? startDate : p.endDate;
-                      return { ...p, startDate, endDate };
-                    })}
-                  />
-                </div>
-                <div className="ig">
-                  <label className="il">Leave</label>
-                  <input
-                    className="input"
-                    type="date"
-                    value={details.endDate}
-                    min={details.startDate || undefined}
-                    onChange={e => setDetails(p => ({ ...p, endDate: e.target.value }))}
-                  />
-                </div>
-                <div className="ig">
                   <label className="il">Guests</label>
                   <input className="input" placeholder="e.g. 10 guests" value={details.groupSize} onChange={e => setDetails(p=>({...p,groupSize:e.target.value}))} />
                 </div>
-                <div className="ig">
-                  <label className="il">Budget</label>
-                  <select className="input" value={details.budget} onChange={e => setDetails(p=>({...p,budget:e.target.value}))}>
-                    <option value="budget">Keeping it reasonable</option>
-                    <option value="moderate">Mid-range</option>
-                    <option value="luxe">No ceiling</option>
-                  </select>
-                </div>
               </div>
-              {details.startDate && details.endDate && (
-                <p style={{
-                  fontSize: "0.78rem",
-                  fontWeight: 600,
-                  color: "var(--violet)",
-                  marginTop: "-0.25rem",
-                  marginBottom: "1rem",
-                }}>
-                  {describeDates(details.startDate, details.endDate)}
-                </p>
-              )}
+              <div className="ig">
+                <label className="il">Dates</label>
+                <DateRangeField
+                  startDate={details.startDate}
+                  endDate={details.endDate}
+                  onChange={({ startDate, endDate }) => setDetails(p => ({ ...p, startDate, endDate }))}
+                />
+              </div>
+              <div className="ig">
+                <label className="il">Budget</label>
+                <select className="input" value={details.budget} onChange={e => setDetails(p=>({...p,budget:e.target.value}))}>
+                  <option value="budget">Keeping it reasonable</option>
+                  <option value="moderate">Mid-range</option>
+                  <option value="luxe">No ceiling</option>
+                </select>
+              </div>
               <div className="ig">
                 <label className="il">Vibe notes</label>
                 <textarea className="input" placeholder="Rooftop bars, no seafood, obsessed with live music…" value={details.notes} onChange={e => setDetails(p=>({...p,notes:e.target.value}))} />
