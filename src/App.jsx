@@ -114,44 +114,58 @@ export default function App() {
 
   function isSelected(tab, item) { return selected[tab].some(i => i.name===item.name); }
 
+  const [itinError, setItinError] = useState(false);
+
   async function buildItinerary() {
-    setLoadingItin(true); setStep("itinerary");
-    const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${cat}: ${i.name}`));
+    setLoadingItin(true);
+    setItinError(false);
+    setStep("itinerary");
+    const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => i.name));
+    const venueList = picks.length > 0 ? picks.join(", ") : `popular spots in ${city}`;
+    const prompt = `Create a 2-day bachelorette weekend itinerary for ${details.brideName || "the bride"} visiting ${city}${details.date ? " on " + details.date : ""}. Group size: ${details.groupSize || "8 guests"}. Budget: ${details.budget}. Include these venues: ${venueList}. ${details.notes ? "Notes: " + details.notes : ""}
+
+Return ONLY this JSON, nothing else:
+{
+  "title": "${details.brideName || "The Bride"}'s ${city} Weekend",
+  "days": [
+    {
+      "dayLabel": "Friday — Arrival",
+      "timeBlocks": [
+        {"time": "3:00 PM", "activity": "Check in", "venue": "Hotel or Airbnb", "notes": "Drop bags and freshen up", "emoji": "🏨"},
+        {"time": "5:00 PM", "activity": "Welcome drinks", "venue": "Rooftop bar", "notes": "First toast to the bride", "emoji": "🥂"},
+        {"time": "7:30 PM", "activity": "Dinner", "venue": "Restaurant name", "notes": "Reservation for the group", "emoji": "🍽️"},
+        {"time": "10:00 PM", "activity": "Night out", "venue": "Bar or club name", "notes": "Dance the night away", "emoji": "🎉"}
+      ]
+    },
+    {
+      "dayLabel": "Saturday — The Big Day",
+      "timeBlocks": [
+        {"time": "10:00 AM", "activity": "Brunch", "venue": "Brunch spot", "notes": "Fuel up for the day", "emoji": "🥞"},
+        {"time": "1:00 PM", "activity": "Afternoon activity", "venue": "Activity venue", "notes": "Group fun", "emoji": "☀️"},
+        {"time": "4:00 PM", "activity": "Get ready together", "venue": "Airbnb or hotel", "notes": "Hair, makeup, photos", "emoji": "💄"},
+        {"time": "7:00 PM", "activity": "Dinner", "venue": "Restaurant name", "notes": "The main celebration dinner", "emoji": "🥩"},
+        {"time": "10:00 PM", "activity": "Bar crawl", "venue": "${city} nightlife", "notes": "Hit the best spots", "emoji": "🍸"}
+      ]
+    }
+  ],
+  "tips": [
+    "Make reservations at least 2 weeks ahead for groups of 8+",
+    "Rideshare apps are easiest for moving the group around ${city}",
+    "Designate someone to handle the group chat and keep everyone on schedule"
+  ]
+}
+
+Replace all venue names with the real venues from the list: ${venueList}. Make all details specific to ${city}.`;
+
     try {
-      const result = await callClaude(`Build a detailed bachelorette weekend itinerary for ${details.brideName||"the bride"} in ${city}. Date: ${details.date||"TBD"}. Group: ${details.groupSize||"unknown"}. Budget: ${details.budget}. Spots: ${picks.join(", ")||"suggest great spots for city"}. Notes: ${details.notes||"none"}. 
-
-IMPORTANT: Always return a FULL and DETAILED itinerary covering at least 2 days with at least 4-5 time blocks per day. Each time block must have a specific time, a vivid activity description, a real venue name, helpful notes, and an emoji. The tips must be specific and actionable for this city and group. Never return a short or incomplete itinerary.
-
-Return JSON with exactly this structure: { "title": "string", "days": [{ "dayLabel": "string", "timeBlocks": [{ "time": "string", "activity": "string", "venue": "string", "notes": "string", "emoji": "string" }] }], "tips": ["string", "string", "string"] }`);
+      const result = await callClaude(prompt);
       if (result && result.days && result.days.length > 0) {
         setItinerary(result);
       } else {
-        setItinerary({
-          title: `${details.brideName ? details.brideName + "'s" : ""} ${city} Weekend`,
-          days: [{
-            dayLabel: "Day 1 — Arrival",
-            timeBlocks: [
-              { time: "3:00 PM", activity: "Check in and settle", venue: picks[0]?.split(": ")[1] || city, notes: "Get the group together", emoji: "🏠" },
-              { time: "7:00 PM", activity: "Dinner", venue: picks.find(p=>p.includes("dining"))?.split(": ")[1] || "Local restaurant", notes: "Celebrate the bride", emoji: "🍽️" },
-              { time: "9:30 PM", activity: "Night out", venue: picks.find(p=>p.includes("bars"))?.split(": ")[1] || "Local bar", notes: "Enjoy the city", emoji: "🍸" }
-            ]
-          }],
-          tips: ["Book restaurants in advance for large groups", "Share the itinerary with all guests ahead of time", "Build in some free time for spontaneous fun"]
-        });
+        setItinError(true);
       }
     } catch(e) {
-      setItinerary({
-        title: `${details.brideName ? details.brideName + "'s" : ""} ${city} Weekend`,
-        days: [{
-          dayLabel: "Day 1 — Arrival",
-          timeBlocks: [
-            { time: "3:00 PM", activity: "Check in and settle", venue: city, notes: "Get the group together", emoji: "🏠" },
-            { time: "7:00 PM", activity: "Dinner", venue: "Selected restaurant", notes: "Celebrate the bride", emoji: "🍽️" },
-            { time: "9:30 PM", activity: "Night out", venue: "Selected bar", notes: "Enjoy the city", emoji: "🍸" }
-          ]
-        }],
-        tips: ["Book restaurants in advance for large groups", "Share the itinerary with all guests ahead of time", "Build in some free time for spontaneous fun"]
-      });
+      setItinError(true);
     }
     setLoadingItin(false);
   }
@@ -693,6 +707,20 @@ Return JSON with exactly this structure: { "title": "string", "days": [{ "dayLab
                 <div className="lw">
                   <div className="g-spin" />
                   <p style={{fontSize:"0.72rem",fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:"var(--muted)"}}>Building the plan</p>
+                </div>
+              ) : itinError ? (
+                <div style={{textAlign:"center",padding:"3rem 1rem"}}>
+                  <p style={{fontSize:"2rem",marginBottom:"1rem"}}>⚠️</p>
+                  <p style={{fontWeight:700,fontSize:"1.1rem",marginBottom:"0.5rem",color:"var(--ink)"}}>Something went wrong</p>
+                  <p style={{color:"var(--muted)",fontSize:"0.88rem",marginBottom:"2rem"}}>The plan didn't load correctly. Try again.</p>
+                  <div className="arow" style={{justifyContent:"center"}}>
+                    <button className="btn btn-ghost" onClick={()=>setStep("explore")}>
+                      <ArrowLeft size={14} strokeWidth={2} /> Edit picks
+                    </button>
+                    <button className="btn btn-grad" onClick={buildItinerary}>
+                      Try again
+                    </button>
+                  </div>
                 </div>
               ) : itinerary && (
                 <div>
