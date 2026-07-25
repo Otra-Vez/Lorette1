@@ -112,9 +112,37 @@ export default function App() {
     setLoadingItin(true); setStep("itinerary");
     const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${cat}: ${i.name}`));
     try {
-      const result = await callClaude(`Build a bachelorette weekend itinerary for ${details.brideName||"the bride"} in ${city}. Date: ${details.date||"TBD"}. Group: ${details.groupSize||"unknown"}. Budget: ${details.budget}. Spots: ${picks.join(", ")||"suggest for city"}. Notes: ${details.notes||"none"}. Return JSON: { title, days: [{ dayLabel, timeBlocks: [{ time, activity, venue, notes, emoji }] }], tips: [3 strings] }`);
-      setItinerary(result);
-    } catch(e) { setItinerary({ title:`${city} Weekend`, days:[], tips:[] }); }
+      const result = await callClaude(`Build a bachelorette weekend itinerary for ${details.brideName||"the bride"} in ${city}. Date: ${details.date||"TBD"}. Group: ${details.groupSize||"unknown"}. Budget: ${details.budget}. Spots: ${picks.join(", ")||"suggest for city"}. Notes: ${details.notes||"none"}. Return JSON with exactly this structure: { "title": "string", "days": [{ "dayLabel": "string", "timeBlocks": [{ "time": "string", "activity": "string", "venue": "string", "notes": "string", "emoji": "string" }] }], "tips": ["string", "string", "string"] }`);
+      if (result && result.days && result.days.length > 0) {
+        setItinerary(result);
+      } else {
+        setItinerary({
+          title: `${details.brideName ? details.brideName + "'s" : ""} ${city} Weekend`,
+          days: [{
+            dayLabel: "Day 1 — Arrival",
+            timeBlocks: [
+              { time: "3:00 PM", activity: "Check in and settle", venue: picks[0]?.split(": ")[1] || city, notes: "Get the group together", emoji: "🏠" },
+              { time: "7:00 PM", activity: "Dinner", venue: picks.find(p=>p.includes("dining"))?.split(": ")[1] || "Local restaurant", notes: "Celebrate the bride", emoji: "🍽️" },
+              { time: "9:30 PM", activity: "Night out", venue: picks.find(p=>p.includes("bars"))?.split(": ")[1] || "Local bar", notes: "Enjoy the city", emoji: "🍸" }
+            ]
+          }],
+          tips: ["Book restaurants in advance for large groups", "Share the itinerary with all guests ahead of time", "Build in some free time for spontaneous fun"]
+        });
+      }
+    } catch(e) {
+      setItinerary({
+        title: `${details.brideName ? details.brideName + "'s" : ""} ${city} Weekend`,
+        days: [{
+          dayLabel: "Day 1 — Arrival",
+          timeBlocks: [
+            { time: "3:00 PM", activity: "Check in and settle", venue: city, notes: "Get the group together", emoji: "🏠" },
+            { time: "7:00 PM", activity: "Dinner", venue: "Selected restaurant", notes: "Celebrate the bride", emoji: "🍽️" },
+            { time: "9:30 PM", activity: "Night out", venue: "Selected bar", notes: "Enjoy the city", emoji: "🍸" }
+          ]
+        }],
+        tips: ["Book restaurants in advance for large groups", "Share the itinerary with all guests ahead of time", "Build in some free time for spontaneous fun"]
+      });
+    }
     setLoadingItin(false);
   }
 
