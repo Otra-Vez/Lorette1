@@ -56,6 +56,70 @@ function nightsBetween(a, b) {
   return Math.round((fromISO(b) - fromISO(a)) / 86400000);
 }
 
+// ── INLINE EDITING ───────────────────────────────────────────────────────────
+// Any itinerary text becomes an input on click. Enter or clicking away saves,
+// Escape reverts.
+
+function EditableText({ value, onChange, multiline, placeholder, className = "", ariaLabel }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const ref = useRef(null);
+
+  // stay in sync when the itinerary is regenerated underneath us
+  useEffect(() => { if (!editing) setDraft(value ?? ""); }, [value, editing]);
+
+  useEffect(() => {
+    if (!editing || !ref.current) return;
+    const el = ref.current;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    if (multiline) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
+  }, [editing, multiline]);
+
+  function commit() {
+    const next = draft.trim();
+    if (next !== (value ?? "")) onChange(next);
+    setEditing(false);
+  }
+  function cancel() { setDraft(value ?? ""); setEditing(false); }
+
+  if (editing) {
+    const shared = {
+      ref,
+      value: draft,
+      "aria-label": ariaLabel,
+      className: `ed-input ${className}`,
+      onChange: (e) => {
+        setDraft(e.target.value);
+        if (multiline) { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }
+      },
+      onBlur: commit,
+      onKeyDown: (e) => {
+        if (e.key === "Escape") { e.preventDefault(); cancel(); }
+        // single-line fields commit on Enter; textareas allow newlines
+        if (e.key === "Enter" && !multiline) { e.preventDefault(); commit(); }
+        if (e.key === "Enter" && multiline && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+      },
+    };
+    return multiline ? <textarea rows={1} {...shared} /> : <input type="text" {...shared} />;
+  }
+
+  return (
+    <span
+      className={`ed ${className} ${!value ? "ed-empty" : ""}`}
+      role="button"
+      tabIndex={0}
+      aria-label={ariaLabel}
+      onClick={() => setEditing(true)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing(true); }
+      }}
+    >
+      {value || placeholder || "Add text"}
+    </span>
+  );
+}
+
 function DateRangeField({ startDate, endDate, onChange }) {
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState(null);
@@ -363,6 +427,18 @@ Respond with a single JSON object and nothing else, using exactly these keys:
     setLoadingItin(false);
   }
 
+  // Immutable edit of any field inside the itinerary tree.
+  function editItinerary(mutate) {
+    setItinerary(prev => {
+      if (!prev) return prev;
+      const next = typeof structuredClone === "function"
+        ? structuredClone(prev)
+        : JSON.parse(JSON.stringify(prev));
+      mutate(next);
+      return next;
+    });
+  }
+
   async function draftEmail() {
     setLoadingEmail(true);
     const list = emails.split(/[,\n]/).map(e => e.trim()).filter(Boolean);
@@ -542,6 +618,48 @@ Respond with a single JSON object and nothing else, using exactly these keys:
         .input::placeholder { color:var(--muted); font-weight:400; opacity:0.7; }
         textarea.input { resize:vertical; min-height:78px; }
         @media(max-width:500px){ .g2 { grid-template-columns:1fr; } }
+
+        /* ── INLINE EDITING ── */
+        .ed {
+          display:inline-block;
+          cursor:text;
+          border-radius:6px;
+          box-decoration-break:clone;
+          -webkit-box-decoration-break:clone;
+          transition:background 0.12s, box-shadow 0.12s;
+        }
+        .ed:hover {
+          background:rgba(124,58,237,0.08);
+          box-shadow:0 0 0 4px rgba(124,58,237,0.08);
+        }
+        .ed:focus-visible {
+          outline:2px solid var(--violet);
+          outline-offset:3px;
+          background:rgba(124,58,237,0.08);
+        }
+        .ed-empty { color:var(--muted); font-weight:400; opacity:0.6; }
+        .ed-grow { flex:1; }
+        .ed-input {
+          /* inherit everything so the text doesn't jump when it becomes a field */
+          font:inherit;
+          font-family:inherit;
+          color:inherit;
+          letter-spacing:inherit;
+          line-height:inherit;
+          text-transform:inherit;
+          width:100%;
+          background:var(--bg);
+          border:1.5px solid var(--violet);
+          border-radius:8px;
+          padding:2px 7px;
+          margin:-3px -8px;
+          outline:none;
+          resize:none;
+          overflow:hidden;
+          box-shadow:0 0 0 3px rgba(124,58,237,0.12);
+        }
+        .day-pill .ed:hover { background:rgba(255,255,255,0.18); box-shadow:0 0 0 4px rgba(255,255,255,0.18); }
+        .day-pill .ed-input { background:var(--ink); color:#fff; border-color:rgba(255,255,255,0.5); }
 
         /* ── DATE RANGE PICKER ── */
         .dr-wrap { position:relative; }
@@ -1009,20 +1127,62 @@ Respond with a single JSON object and nothing else, using exactly these keys:
               ) : itinerary && (
                 <div>
                   <div className="itin-hero">
-                    <p className="itin-eyebrow">Your Lorette plan</p>
-                    <div className="itin-title">{itinerary.title}</div>
+                    <p className="itin-eyebrow">Your Lorette plan · tap any text to edit</p>
+                    <div className="itin-title">
+                      <EditableText
+                        value={itinerary.title}
+                        ariaLabel="Itinerary title"
+                        placeholder="Name this weekend"
+                        onChange={v => editItinerary(d => { d.title = v; })}
+                      />
+                    </div>
                   </div>
                   {itinerary.days?.map((day,di) => (
                     <div key={di} className="day-block">
-                      <div className="day-pill">{day.dayLabel||`Day ${di+1}`}</div>
+                      <div className="day-pill">
+                        <EditableText
+                          value={day.dayLabel || `Day ${di+1}`}
+                          ariaLabel={`Label for day ${di+1}`}
+                          onChange={v => editItinerary(d => { d.days[di].dayLabel = v; })}
+                        />
+                      </div>
                       {day.timeBlocks?.map((block,bi) => (
                         <div key={bi} className="itin-row">
-                          <div className="itin-time">{block.time}</div>
+                          <div className="itin-time">
+                            <EditableText
+                              value={block.time}
+                              ariaLabel="Time"
+                              placeholder="Time"
+                              onChange={v => editItinerary(d => { d.days[di].timeBlocks[bi].time = v; })}
+                            />
+                          </div>
                           <div className="itin-dot" />
                           <div className="itin-content">
-                            <div className="itin-act">{block.activity}</div>
-                            {block.venue && <div className="itin-venue">{block.venue}</div>}
-                            {block.notes && <div className="itin-note">{block.notes}</div>}
+                            <div className="itin-act">
+                              <EditableText
+                                value={block.activity}
+                                ariaLabel="Activity"
+                                placeholder="What's happening"
+                                onChange={v => editItinerary(d => { d.days[di].timeBlocks[bi].activity = v; })}
+                              />
+                            </div>
+                            <div className="itin-venue">
+                              <EditableText
+                                value={block.venue}
+                                ariaLabel="Venue"
+                                placeholder="Add a place"
+                                onChange={v => editItinerary(d => { d.days[di].timeBlocks[bi].venue = v; })}
+                              />
+                            </div>
+                            <div className="itin-note">
+                              <EditableText
+                                value={block.notes}
+                                ariaLabel="Notes"
+                                placeholder="Add a note"
+                                multiline
+                                onChange={v => editItinerary(d => { d.days[di].timeBlocks[bi].notes = v; })}
+                              />
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -1032,7 +1192,17 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                     <div className="tips-card">
                       <div className="tips-head">Good to know</div>
                       {itinerary.tips.map((tip,i) => (
-                        <div key={i} className="tip-row"><span className="tip-dot">—</span><span>{tip}</span></div>
+                        <div key={i} className="tip-row">
+                          <span className="tip-dot">—</span>
+                          <EditableText
+                            value={tip}
+                            ariaLabel={`Tip ${i+1}`}
+                            placeholder="Add a tip"
+                            multiline
+                            className="ed-grow"
+                            onChange={v => editItinerary(d => { d.tips[i] = v; })}
+                          />
+                        </div>
                       ))}
                     </div>
                   )}
