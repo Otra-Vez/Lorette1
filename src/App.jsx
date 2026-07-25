@@ -73,6 +73,7 @@ export default function App() {
   const [selected, setSelected] = useState({ dining:[], bars:[], stay:[], activities:[] });
   const [itinerary, setItinerary] = useState(null);
   const [loadingItin, setLoadingItin] = useState(false);
+  const [itinError, setItinError] = useState(false);
   const [emails, setEmails] = useState("");
   const [emailPreview, setEmailPreview] = useState(null);
   const [loadingEmail, setLoadingEmail] = useState(false);
@@ -114,48 +115,32 @@ export default function App() {
 
   function isSelected(tab, item) { return selected[tab].some(i => i.name===item.name); }
 
-  const [itinError, setItinError] = useState(false);
-
   async function buildItinerary() {
     setLoadingItin(true);
     setItinError(false);
     setStep("itinerary");
-    const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => i.name));
-    const venueList = picks.length > 0 ? picks.join(", ") : `popular spots in ${city}`;
-    const prompt = `Create a 2-day bachelorette weekend itinerary for ${details.brideName || "the bride"} visiting ${city}${details.date ? " on " + details.date : ""}. Group size: ${details.groupSize || "8 guests"}. Budget: ${details.budget}. Include these venues: ${venueList}. ${details.notes ? "Notes: " + details.notes : ""}
+    const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${i.name} (${cat})`));
+    const venueList = picks.length > 0 ? picks.join(", ") : `none selected — choose great real spots in ${city} yourself`;
 
-Return ONLY this JSON, nothing else:
-{
-  "title": "${details.brideName || "The Bride"}'s ${city} Weekend",
-  "days": [
-    {
-      "dayLabel": "Friday — Arrival",
-      "timeBlocks": [
-        {"time": "3:00 PM", "activity": "Check in", "venue": "Hotel or Airbnb", "notes": "Drop bags and freshen up", "emoji": "🏨"},
-        {"time": "5:00 PM", "activity": "Welcome drinks", "venue": "Rooftop bar", "notes": "First toast to the bride", "emoji": "🥂"},
-        {"time": "7:30 PM", "activity": "Dinner", "venue": "Restaurant name", "notes": "Reservation for the group", "emoji": "🍽️"},
-        {"time": "10:00 PM", "activity": "Night out", "venue": "Bar or club name", "notes": "Dance the night away", "emoji": "🎉"}
-      ]
-    },
-    {
-      "dayLabel": "Saturday — The Big Day",
-      "timeBlocks": [
-        {"time": "10:00 AM", "activity": "Brunch", "venue": "Brunch spot", "notes": "Fuel up for the day", "emoji": "🥞"},
-        {"time": "1:00 PM", "activity": "Afternoon activity", "venue": "Activity venue", "notes": "Group fun", "emoji": "☀️"},
-        {"time": "4:00 PM", "activity": "Get ready together", "venue": "Airbnb or hotel", "notes": "Hair, makeup, photos", "emoji": "💄"},
-        {"time": "7:00 PM", "activity": "Dinner", "venue": "Restaurant name", "notes": "The main celebration dinner", "emoji": "🥩"},
-        {"time": "10:00 PM", "activity": "Bar crawl", "venue": "${city} nightlife", "notes": "Hit the best spots", "emoji": "🍸"}
-      ]
-    }
-  ],
-  "tips": [
-    "Make reservations at least 2 weeks ahead for groups of 8+",
-    "Rideshare apps are easiest for moving the group around ${city}",
-    "Designate someone to handle the group chat and keep everyone on schedule"
-  ]
-}
+    const prompt = `You're planning a bachelorette weekend in ${city} for ${details.brideName || "the bride"}.
 
-Replace all venue names with the real venues from the list: ${venueList}. Make all details specific to ${city}.`;
+Group: ${details.groupSize || "8 guests"}
+Dates: ${details.date || "a weekend, dates TBD"}
+Budget: ${details.budget}
+Spots they picked: ${venueList}
+${details.notes ? `What she's into: ${details.notes}` : ""}
+
+Write a real weekend, not a generic one. Ground everything in ${city} specifically — actual neighborhoods, actual venues, the way people actually move around that city. Build the flow around the spots they picked and fill the gaps with places you'd genuinely send a group of ${details.groupSize || "8"} to. Let the arc and pacing follow what makes sense for this particular group and city, not a fixed formula: some weekends want a slow start, some want to hit the ground running.
+
+Write it in the voice of a friend who lives there and has already made the reservations — warm, specific, unbothered. Titles, day labels, activity names, and notes should all sound like her, and should read differently every time. Skip filler like "enjoy the city" or "celebrate the bride"; say the actual thing. Notes are for what someone would genuinely need to know: what to wear, when to leave, what to order, what fills up.
+
+Tips should be things only someone who's done this in ${city} would tell you — not generic advice about booking ahead.
+
+Respond with a single JSON object and nothing else, using exactly these keys:
+
+{"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}
+
+Length is up to you — however many days and blocks the weekend actually needs.`;
 
     try {
       const result = await callClaude(prompt);
