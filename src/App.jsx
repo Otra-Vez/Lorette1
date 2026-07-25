@@ -747,39 +747,48 @@ Respond with a single JSON object and nothing else, using exactly these keys:
 {"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}`;
 
     const budget = Math.min(8000, 3000 + (dayCount || 2) * 900);
+
+    // Errors the user has to act on — retrying a different way won't help.
+    const isTerminal = (msg) => /credit|balance|quota|API key|timed out/i.test(msg || "");
+
+    const acceptOrFail = (result) => {
+      if (result && Array.isArray(result.days) && result.days.length > 0) {
+        setItinerary(result);
+        return true;
+      }
+      return false;
+    };
+
     try {
-      let sawPartial = false;
       const result = await callClaudeStreaming(prompt, {
         maxTokens: budget,
         onPartial: (partial) => {
           // Show the plan building itself rather than a spinner
           if (partial.title || partial.days?.length) {
-            sawPartial = true;
             setLoadingItin(false);
             setItinerary(partial);
           }
         },
       });
-      if (result && Array.isArray(result.days) && result.days.length > 0) {
-        setItinerary(result);
-      } else {
-        setItinerary(null);
-        setItinError("Claude sent back a plan with no days in it.");
-      }
+      if (!acceptOrFail(result)) throw new Error("Claude sent back a plan with no days in it.");
     } catch(e) {
-      if (e.message === "STREAM_UNSUPPORTED") {
-        // Browser or host can't stream — fall back to the blocking request
+      if (isTerminal(e.message)) {
+        setItinerary(null);
+        setItinError(e.message);
+      } else {
+        // Streaming failed for a recoverable reason — the plain request often
+        // succeeds where the stream didn't, so try once before giving up.
+        setLoadingItin(true);
+        setItinerary(null);
         try {
           const result = await callClaude(prompt, { maxTokens: budget });
-          if (result && Array.isArray(result.days) && result.days.length > 0) setItinerary(result);
-          else setItinError("Claude sent back a plan with no days in it.");
+          if (!acceptOrFail(result)) {
+            setItinError("Claude sent back a plan with no days in it.");
+          }
         } catch (inner) {
           setItinerary(null);
           setItinError(inner.message || "Something went wrong.");
         }
-      } else {
-        setItinerary(null);
-        setItinError(e.message || "Something went wrong.");
       }
     }
     setLoadingItin(false);
@@ -1494,7 +1503,7 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                     <button className="btn btn-ghost" onClick={()=>setStep("explore")}>
                       <ArrowLeft size={14} strokeWidth={2} /> Edit picks
                     </button>
-                    <button className="btn btn-grad" onClick={buildItinerary}>
+                    <button className="btn btn-grad" onClick={() => { setItinError(""); setLoadingItin(true); buildItinerary(); }}>
                       Try again
                     </button>
                   </div>
