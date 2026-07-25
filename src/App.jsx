@@ -112,7 +112,11 @@ export default function App() {
     setLoadingItin(true); setStep("itinerary");
     const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${cat}: ${i.name}`));
     try {
-      const result = await callClaude(`Build a bachelorette weekend itinerary for ${details.brideName||"the bride"} in ${city}. Date: ${details.date||"TBD"}. Group: ${details.groupSize||"unknown"}. Budget: ${details.budget}. Spots: ${picks.join(", ")||"suggest for city"}. Notes: ${details.notes||"none"}. Return JSON with exactly this structure: { "title": "string", "days": [{ "dayLabel": "string", "timeBlocks": [{ "time": "string", "activity": "string", "venue": "string", "notes": "string", "emoji": "string" }] }], "tips": ["string", "string", "string"] }`);
+      const result = await callClaude(`Build a detailed bachelorette weekend itinerary for ${details.brideName||"the bride"} in ${city}. Date: ${details.date||"TBD"}. Group: ${details.groupSize||"unknown"}. Budget: ${details.budget}. Spots: ${picks.join(", ")||"suggest great spots for city"}. Notes: ${details.notes||"none"}. 
+
+IMPORTANT: Always return a FULL and DETAILED itinerary covering at least 2 days with at least 4-5 time blocks per day. Each time block must have a specific time, a vivid activity description, a real venue name, helpful notes, and an emoji. The tips must be specific and actionable for this city and group. Never return a short or incomplete itinerary.
+
+Return JSON with exactly this structure: { "title": "string", "days": [{ "dayLabel": "string", "timeBlocks": [{ "time": "string", "activity": "string", "venue": "string", "notes": "string", "emoji": "string" }] }], "tips": ["string", "string", "string"] }`);
       if (result && result.days && result.days.length > 0) {
         setItinerary(result);
       } else {
