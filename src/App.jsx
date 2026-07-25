@@ -45,13 +45,20 @@ async function callClaude(prompt) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      system: "You are a bachelorette weekend planning expert. Respond with valid JSON only — no markdown, no backticks.",
+      system: "You are a bachelorette weekend planning expert. Always respond with valid JSON only. No markdown, no backticks, no explanation — just the raw JSON object.",
       messages: [{ role: 'user', content: prompt }],
     }),
   });
   const data = await resp.json();
   const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') || '';
-  return JSON.parse(text.replace(/```json|```/g, '').trim());
+  const clean = text
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('No JSON found');
+  return JSON.parse(clean.slice(start, end + 1));
 }
 
 export default function App() {
