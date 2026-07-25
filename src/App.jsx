@@ -10,6 +10,26 @@ const TAB_ICONS = { dining: Utensils, bars: Wine, stay: Building2, activities: C
 const PRICE = { 1: "$", 2: "$$", 3: "$$$", 4: "$$$$" };
 const STARS_OPT = [2, 3, 4, 5];
 
+// Turns the two date inputs into readable text for prompts, e.g.
+// "Friday, May 15 through Sunday, May 17 2026 (3 days, 2 nights)"
+function describeDates(startDate, endDate) {
+  if (!startDate && !endDate) return "";
+  const fmt = (iso) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+      weekday: "long", month: "long", day: "numeric", year: "numeric",
+    });
+  };
+  if (startDate && !endDate) return fmt(startDate);
+  if (!startDate && endDate) return fmt(endDate);
+  if (startDate === endDate) return fmt(startDate);
+  const nights = Math.round(
+    (new Date(endDate) - new Date(startDate)) / 86400000
+  );
+  const nightLabel = nights === 1 ? "1 night" : `${nights} nights`;
+  return `${fmt(startDate)} through ${fmt(endDate)} (${nights + 1} days, ${nightLabel})`;
+}
+
 function Spinner() {
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"0.9rem", padding:"3rem 1rem" }}>
@@ -64,7 +84,7 @@ export default function App() {
   const [step, setStep] = useState("destination");
   const [city, setCity] = useState("");
   const [cityInput, setCityInput] = useState("");
-  const [details, setDetails] = useState({ brideName:"", date:"", groupSize:"", budget:"moderate", notes:"" });
+  const [details, setDetails] = useState({ brideName:"", startDate:"", endDate:"", groupSize:"", budget:"moderate", notes:"" });
   const [explore, setExplore] = useState({ dining:[], bars:[], stay:[], activities:[] });
   const [activeTab, setActiveTab] = useState("dining");
   const [loadingTab, setLoadingTab] = useState(null);
@@ -121,14 +141,22 @@ export default function App() {
     setStep("itinerary");
     const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${i.name} (${cat})`));
     const venueList = picks.length > 0 ? picks.join(", ") : `none selected — choose great real spots in ${city} yourself`;
+    const dateText = describeDates(details.startDate, details.endDate);
+    const dayCount = details.startDate && details.endDate
+      ? Math.round((new Date(details.endDate) - new Date(details.startDate)) / 86400000) + 1
+      : null;
 
     const prompt = `You're planning a bachelorette weekend in ${city} for ${details.brideName || "the bride"}.
 
 Group: ${details.groupSize || "8 guests"}
-Dates: ${details.date || "a weekend, dates TBD"}
+Dates: ${dateText || "a weekend, dates TBD"}
 Budget: ${details.budget}
 Spots they picked: ${venueList}
 ${details.notes ? `What she's into: ${details.notes}` : ""}
+
+${dayCount
+  ? `The trip runs ${dayCount} day${dayCount === 1 ? "" : "s"} — cover every one of them, with a "days" entry per calendar day from arrival through departure. Label each day with its real weekday and date. Pace it like a real trip: arrival day starts partway through, departure day is short and ends before checkout.`
+  : `Dates aren't set yet, so plan a typical weekend and label the days generically.`}
 
 Write a real weekend, not a generic one. Ground everything in ${city} specifically — actual neighborhoods, actual venues, the way people actually move around that city. Build the flow around the spots they picked and fill the gaps with places you'd genuinely send a group of ${details.groupSize || "8"} to. Let the arc and pacing follow what makes sense for this particular group and city, not a fixed formula: some weekends want a slow start, some want to hit the ground running.
 
@@ -138,9 +166,7 @@ Tips should be things only someone who's done this in ${city} would tell you —
 
 Respond with a single JSON object and nothing else, using exactly these keys:
 
-{"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}
-
-Length is up to you — however many days and blocks the weekend actually needs.`;
+{"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}`;
 
     try {
       const result = await callClaude(prompt);
@@ -159,7 +185,7 @@ Length is up to you — however many days and blocks the weekend actually needs.
     setLoadingEmail(true);
     const list = emails.split(/[,\n]/).map(e => e.trim()).filter(Boolean);
     try {
-      const result = await callClaude(`Write a bachelorette weekend invite for ${details.brideName||"the bride"} in ${city}. Date: ${details.date||"TBD"}. Guests: ${details.groupSize}. Highlights: ${itinerary?.days?.flatMap(d=>d.timeBlocks?.map(t=>t.venue)).filter(Boolean).slice(0,5).join(", ")||city}. Warm, specific, no filler. Return JSON: { subject, body (HTML) }`);
+      const result = await callClaude(`Write a bachelorette weekend invite for ${details.brideName||"the bride"} in ${city}. Dates: ${describeDates(details.startDate, details.endDate)||"TBD"}. Guests: ${details.groupSize}. Highlights: ${itinerary?.days?.flatMap(d=>d.timeBlocks?.map(t=>t.venue)).filter(Boolean).slice(0,5).join(", ")||city}. Warm, specific, no filler. Return JSON: { subject, body (HTML) }`);
       setEmailPreview({ ...result, recipients: list });
     } catch(e) { setEmailPreview({ subject:"Weekend plans — say yes.", body:"<p>You're going to want to be there.</p>", recipients: list }); }
     setLoadingEmail(false);
@@ -558,8 +584,28 @@ Length is up to you — however many days and blocks the weekend actually needs.
                   <input className="input" placeholder="e.g. Jess" value={details.brideName} onChange={e => setDetails(p=>({...p,brideName:e.target.value}))} />
                 </div>
                 <div className="ig">
-                  <label className="il">Date</label>
-                  <input className="input" type="date" value={details.date} onChange={e => setDetails(p=>({...p,date:e.target.value}))} />
+                  <label className="il">Arrive</label>
+                  <input
+                    className="input"
+                    type="date"
+                    value={details.startDate}
+                    onChange={e => setDetails(p => {
+                      const startDate = e.target.value;
+                      // keep the range valid if the new start is after the current end
+                      const endDate = p.endDate && startDate && p.endDate < startDate ? startDate : p.endDate;
+                      return { ...p, startDate, endDate };
+                    })}
+                  />
+                </div>
+                <div className="ig">
+                  <label className="il">Leave</label>
+                  <input
+                    className="input"
+                    type="date"
+                    value={details.endDate}
+                    min={details.startDate || undefined}
+                    onChange={e => setDetails(p => ({ ...p, endDate: e.target.value }))}
+                  />
                 </div>
                 <div className="ig">
                   <label className="il">Guests</label>
@@ -574,6 +620,17 @@ Length is up to you — however many days and blocks the weekend actually needs.
                   </select>
                 </div>
               </div>
+              {details.startDate && details.endDate && (
+                <p style={{
+                  fontSize: "0.78rem",
+                  fontWeight: 600,
+                  color: "var(--violet)",
+                  marginTop: "-0.25rem",
+                  marginBottom: "1rem",
+                }}>
+                  {describeDates(details.startDate, details.endDate)}
+                </p>
+              )}
               <div className="ig">
                 <label className="il">Vibe notes</label>
                 <textarea className="input" placeholder="Rooftop bars, no seafood, obsessed with live music…" value={details.notes} onChange={e => setDetails(p=>({...p,notes:e.target.value}))} />
@@ -643,10 +700,11 @@ Length is up to you — however many days and blocks the weekend actually needs.
                   {filtered(activeTab).map((item,i) => {
                     const sel = isSelected(activeTab,item);
                     const size = details.groupSize?.replace(/\D/g,"")||"6";
-                    const date = details.date||new Date().toISOString().split("T")[0];
-                    const checkOut = new Date(new Date(date).getTime()+2*86400000).toISOString().split("T")[0];
+                    const checkIn = details.startDate || new Date().toISOString().split("T")[0];
+                    const checkOut = details.endDate
+                      || new Date(new Date(checkIn).getTime()+2*86400000).toISOString().split("T")[0];
                     const url = activeTab==="stay"
-                      ? `https://www.booking.com/search.html?ss=${encodeURIComponent(item.name+" "+city)}&checkin=${date}&checkout=${checkOut}&group_adults=${size}`
+                      ? `https://www.booking.com/search.html?ss=${encodeURIComponent(item.name+" "+city)}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${size}`
                       : activeTab==="activities"
                       ? `https://www.google.com/search?q=${encodeURIComponent(item.name+" "+city)}`
                       : `https://www.google.com/search?q=${encodeURIComponent(item.name+" "+city+" OpenTable reservation")}`;
