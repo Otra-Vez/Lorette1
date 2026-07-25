@@ -54,7 +54,6 @@ async function callClaude(prompt) {
   return JSON.parse(text.replace(/```json|```/g, '').trim());
 }
 
-
 export default function App() {
   const [step, setStep] = useState("destination");
   const [city, setCity] = useState("");
