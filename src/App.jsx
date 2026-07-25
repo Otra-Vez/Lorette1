@@ -610,6 +610,7 @@ export default function App() {
   const [itinerary, setItinerary] = useState(null);
   const [loadingItin, setLoadingItin] = useState(false);
   const [itinError, setItinError] = useState("");
+  const [fillingDay, setFillingDay] = useState(null);
   const [emails, setEmails] = useState("");
   const [emailPreview, setEmailPreview] = useState(null);
   const [loadingEmail, setLoadingEmail] = useState(false);
@@ -717,79 +718,94 @@ export default function App() {
     setLoadingItin(true);
     setItinError("");
     setStep("itinerary");
+    setItinerary(null);
+
     const picks = Object.entries(selected).flatMap(([cat,items]) => items.map(i => `${i.name} (${cat})`));
-    const venueList = picks.length > 0 ? picks.join(", ") : `none selected — choose great real spots in ${city} yourself`;
+    const venueList = picks.length > 0 ? picks.join(", ") : `none selected — pick great real spots in ${city} yourself`;
     const dateText = describeDates(details.startDate, details.endDate);
     const dayCount = details.startDate && details.endDate
       ? Math.round((new Date(details.endDate) - new Date(details.startDate)) / 86400000) + 1
       : null;
 
-    const prompt = `You're planning a bachelorette weekend in ${city} for ${details.brideName || "the bride"}.
-
+    const context = `Bachelorette weekend in ${city} for ${details.brideName || "the bride"}.
 Group: ${details.groupSize || "8 guests"}
 Dates: ${dateText || "a weekend, dates TBD"}
 Budget: ${details.budget}
 Spots they picked: ${venueList}
-${details.notes ? `What she's into: ${details.notes}` : ""}
+${details.notes ? `What she's into: ${details.notes}` : ""}`;
 
-${dayCount
-  ? `The trip runs ${dayCount} day${dayCount === 1 ? "" : "s"} — cover every one of them, with a "days" entry per calendar day from arrival through departure. Label each day with its real weekday and date. Pace it like a real trip: arrival day starts partway through, departure day is short and ends before checkout.`
-  : `Dates aren't set yet, so plan a typical weekend and label the days generically.`}
+    const voice = `Write in the voice of a friend who lives in ${city} and has already made the reservations — warm, specific, unbothered. Skip filler like "enjoy the city" or "celebrate the bride"; say the actual thing. Ground everything in real ${city} neighborhoods and venues.`;
 
-Write a real weekend, not a generic one. Ground everything in ${city} specifically — actual neighborhoods, actual venues, the way people actually move around that city. Build the flow around the spots they picked and fill the gaps with places you'd genuinely send a group of ${details.groupSize || "8"} to. Let the arc and pacing follow what makes sense for this particular group and city, not a fixed formula: some weekends want a slow start, some want to hit the ground running.
-
-Write it in the voice of a friend who lives there and has already made the reservations — warm, specific, unbothered. Titles, day labels, activity names, and notes should all sound like her, and should read differently every time. Skip filler like "enjoy the city" or "celebrate the bride"; say the actual thing. Notes are for what someone would genuinely need to know: what to wear, when to leave, what to order, what fills up.
-
-Tips should be things only someone who's done this in ${city} would tell you — not generic advice about booking ahead.
-
-Respond with a single JSON object and nothing else, using exactly these keys:
-
-{"title": string, "days": [{"dayLabel": string, "timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}], "tips": [string, string, string]}`;
-
-    const budget = Math.min(8000, 3000 + (dayCount || 2) * 900);
-
-    // Errors the user has to act on — retrying a different way won't help.
-    const isTerminal = (msg) => /credit|balance|quota|API key|timed out/i.test(msg || "");
-
-    const acceptOrFail = (result) => {
-      if (result && Array.isArray(result.days) && result.days.length > 0) {
-        setItinerary(result);
-        return true;
-      }
-      return false;
-    };
+    const isTerminal = (msg) => /credit|balance|quota|API key/i.test(msg || "");
 
     try {
-      const result = await callClaudeStreaming(prompt, {
-        maxTokens: budget,
-        onPartial: (partial) => {
-          // Show the plan building itself rather than a spinner
-          if (partial.title || partial.days?.length) {
-            setLoadingItin(false);
-            setItinerary(partial);
-          }
-        },
-      });
-      if (!acceptOrFail(result)) throw new Error("Claude sent back a plan with no days in it.");
-    } catch(e) {
-      if (isTerminal(e.message)) {
-        setItinerary(null);
-        setItinError(e.message);
-      } else {
-        // Streaming failed for a recoverable reason — the plain request often
-        // succeeds where the stream didn't, so try once before giving up.
-        setLoadingItin(true);
-        setItinerary(null);
+      // ── Pass 1: the shape of the weekend. Small and fast, so something is
+      // on screen in seconds instead of after a minute of blank spinner.
+      const skeletonPrompt = `${context}
+
+${voice}
+
+Give me the shape of this weekend — the title, the day labels, and three tips. No schedule yet.
+${dayCount
+  ? `The trip runs ${dayCount} day${dayCount === 1 ? "" : "s"}, so give exactly ${dayCount} day labels, each with its real weekday and date.`
+  : `Give 2 or 3 day labels for a typical weekend.`}
+Tips should be things only someone who's done this in ${city} would know — not generic advice about booking ahead.
+
+Respond with a single JSON object and nothing else:
+{"title": string, "dayLabels": [string], "tips": [string, string, string]}`;
+
+      const skeleton = await callClaude(skeletonPrompt, { maxTokens: 700 });
+      const labels = Array.isArray(skeleton?.dayLabels) ? skeleton.dayLabels.filter(Boolean) : [];
+      if (!labels.length) throw new Error("Claude sent back a plan with no days in it.");
+
+      const base = {
+        title: skeleton.title || `${city} Weekend`,
+        days: labels.map(l => ({ dayLabel: l, timeBlocks: [] })),
+        tips: Array.isArray(skeleton.tips) ? skeleton.tips : [],
+      };
+      setItinerary(base);
+      setLoadingItin(false);
+
+      // ── Pass 2: one request per day. Each is small enough to finish well
+      // inside the serverless timeout, and each lands on screen as it arrives.
+      let filled = 0;
+      for (let i = 0; i < labels.length; i++) {
+        setFillingDay(i);
+        const dayPrompt = `${context}
+
+${voice}
+
+Write the schedule for just this one day: "${labels[i]}" (day ${i + 1} of ${labels.length}).
+${i === 0 ? "This is arrival day — it starts partway through, not first thing in the morning." : ""}${i === labels.length - 1 && labels.length > 1 ? "This is departure day — keep it short and end before checkout." : ""}
+Give 4 to 6 time blocks. Notes carry real information: what to wear, when to leave, what to order, what fills up.
+
+Respond with a single JSON object and nothing else:
+{"timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}`;
+
         try {
-          const result = await callClaude(prompt, { maxTokens: budget });
-          if (!acceptOrFail(result)) {
-            setItinError("Claude sent back a plan with no days in it.");
+          const day = await callClaude(dayPrompt, { maxTokens: 1400 });
+          const blocks = Array.isArray(day?.timeBlocks) ? day.timeBlocks : [];
+          if (blocks.length) {
+            filled++;
+            setItinerary(prev => {
+              if (!prev) return prev;
+              const next = structuredClone ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
+              next.days[i].timeBlocks = blocks;
+              return next;
+            });
           }
-        } catch (inner) {
-          setItinerary(null);
-          setItinError(inner.message || "Something went wrong.");
+        } catch (dayErr) {
+          if (isTerminal(dayErr.message)) throw dayErr;
+          // One bad day shouldn't sink the whole plan — leave it empty and continue
         }
       }
+      setFillingDay(null);
+
+      if (filled === 0) throw new Error("The days came back empty. Try again.");
+    } catch(e) {
+      setFillingDay(null);
+      setItinerary(null);
+      setItinError(e.message || "Something went wrong.");
     }
     setLoadingItin(false);
   }
@@ -1530,6 +1546,23 @@ Respond with a single JSON object and nothing else, using exactly these keys:
                           onChange={v => editItinerary(d => { d.days[di].dayLabel = v; })}
                         />
                       </div>
+                      {(!day.timeBlocks || day.timeBlocks.length === 0) && (
+                        <div style={{
+                          display:"flex", alignItems:"center", gap:"0.6rem",
+                          padding:"0.85rem 0", color:"var(--muted)", fontSize:"0.82rem",
+                        }}>
+                          {fillingDay === di ? (
+                            <>
+                              <span className="g-spin" style={{width:16,height:16,borderWidth:2}} />
+                              <span>Writing this day…</span>
+                            </>
+                          ) : fillingDay !== null && di > fillingDay ? (
+                            <span>Up next…</span>
+                          ) : (
+                            <span>Nothing here yet.</span>
+                          )}
+                        </div>
+                      )}
                       {day.timeBlocks?.map((block,bi) => (
                         <div key={bi} className="itin-row">
                           <div className="itin-time">
