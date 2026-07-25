@@ -41,20 +41,19 @@ function ProgressBar({ current }) {
 }
 
 async function callClaude(prompt) {
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+  const resp = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
       system: "You are a bachelorette weekend planning expert. Respond with valid JSON only — no markdown, no backticks.",
-      messages: [{ role:"user", content:prompt }],
+      messages: [{ role: 'user', content: prompt }],
     }),
   });
   const data = await resp.json();
-  const text = data.content?.filter(b => b.type==="text").map(b => b.text).join("") || "";
-  return JSON.parse(text.replace(/```json|```/g,"").trim());
+  const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') || '';
+  return JSON.parse(text.replace(/```json|```/g, '').trim());
 }
+
 
 export default function App() {
   const [step, setStep] = useState("destination");
