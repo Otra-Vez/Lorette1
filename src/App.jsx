@@ -10,6 +10,79 @@ const TAB_ICONS = { dining: Utensils, bars: Wine, stay: Building2, activities: C
 const PRICE = { 1: "$", 2: "$$", 3: "$$$", 4: "$$$$" };
 const STARS_OPT = [2, 3, 4, 5];
 
+// ── AFFILIATE REGISTRY ───────────────────────────────────────────────────────
+// The only place affiliate IDs live. Once a program approves you, paste the ID
+// here and every link picks it up. Leave an ID blank and that link still works,
+// just without attribution — nothing breaks while applications are pending.
+//
+// Where each ID comes from, and what to double-check on signup:
+//   booking   — booking.com/affiliate-program. They issue an "aid".
+//   airbnb    — airbnb.com/associates. Parameter name varies by network; the
+//               dashboard shows a sample link, match it.
+//   opentable — opentable.com/partners, usually via Impact or CJ. Those
+//               networks often wrap the whole URL rather than adding a param;
+//               if so, set `wrap` instead of `id`.
+//
+// Activities deliberately have no affiliate — see bookingLinks below.
+const AFFILIATES = {
+  booking:   { id: "", param: "aid",  wrap: null },
+  airbnb:    { id: "", param: "af",   wrap: null },
+  opentable: { id: "", param: "ref",  wrap: null },
+};
+
+// Adds the affiliate ID if there is one, or routes through a network's
+// wrapper URL if that's how the program works. No ID means a plain link.
+function withAffiliate(providerKey, url) {
+  const a = AFFILIATES[providerKey];
+  if (!a) return url;
+  if (a.wrap) return a.wrap.replace("{url}", encodeURIComponent(url));
+  if (!a.id) return url;
+  return url + (url.includes("?") ? "&" : "?") + `${a.param}=${encodeURIComponent(a.id)}`;
+}
+
+// Returns the booking options for a venue. Stay gets two, since a group of 10
+// wants a whole house as often as it wants hotel rooms.
+function bookingLinks(tab, item, ctx) {
+  const { city, checkIn, checkOut, guests } = ctx;
+  const q = encodeURIComponent(`${item.name} ${city}`);
+
+  if (tab === "stay") {
+    return [
+      {
+        key: "booking",
+        label: "Book",
+        url: withAffiliate("booking",
+          `https://www.booking.com/searchresults.html?ss=${q}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${guests}`),
+      },
+      {
+        key: "airbnb",
+        label: "Airbnb",
+        url: withAffiliate("airbnb",
+          `https://www.airbnb.com/s/${encodeURIComponent(city)}/homes?checkin=${checkIn}&checkout=${checkOut}&adults=${guests}`),
+      },
+    ];
+  }
+
+  if (tab === "activities") {
+    // No affiliate here on purpose. Activities are places, not bookable tours,
+    // so a tour marketplace mostly returns nothing for them. A link that finds
+    // the place beats a link that earns a commission but doesn't work.
+    return [{
+      key: "search",
+      label: "View",
+      url: `https://www.google.com/search?q=${q}`,
+    }];
+  }
+
+  // Dining and bars — reservations are the first affiliate category to wire up
+  return [{
+    key: "opentable",
+    label: "Reserve",
+    url: withAffiliate("opentable",
+      `https://www.opentable.com/s?term=${encodeURIComponent(item.name)}&covers=${guests}&dateTime=${checkIn}T19%3A00`),
+  }];
+}
+
 // Turns the two date inputs into readable text for prompts, e.g.
 // "Friday, May 15 through Sunday, May 17 2026 (3 days, 2 nights)"
 function describeDates(startDate, endDate) {
@@ -1485,11 +1558,7 @@ Respond with a single JSON object and nothing else:
                     const checkIn = details.startDate || new Date().toISOString().split("T")[0];
                     const checkOut = details.endDate
                       || new Date(new Date(checkIn).getTime()+2*86400000).toISOString().split("T")[0];
-                    const url = activeTab==="stay"
-                      ? `https://www.booking.com/search.html?ss=${encodeURIComponent(item.name+" "+city)}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${size}`
-                      : activeTab==="activities"
-                      ? `https://www.google.com/search?q=${encodeURIComponent(item.name+" "+city)}`
-                      : `https://www.google.com/search?q=${encodeURIComponent(item.name+" "+city+" OpenTable reservation")}`;
+                    const links = bookingLinks(activeTab, item, { city, checkIn, checkOut, guests: size });
                     const stars = Math.round(activeTab==="stay"?(item.starRating||3):(item.rating||4));
                     return (
                       <div key={i} className={`vcard ${sel?"von":""}`} onClick={()=>toggleSelect(activeTab,item)}>
@@ -1503,9 +1572,20 @@ Respond with a single JSON object and nothing else:
                             <span className="vprice">{PRICE[item.priceRange]||"$$"}</span>
                             <span className="vstars">{"★".repeat(stars)}</span>
                           </div>
-                          <a href={url} target="_blank" rel="noreferrer" className="vbook" onClick={e=>e.stopPropagation()}>
-                            {activeTab==="stay"?"Book":activeTab==="activities"?"View":"Reserve"}
-                          </a>
+                          <div style={{display:"flex",gap:"0.35rem",alignItems:"center"}}>
+                            {links.map(l => (
+                              <a
+                                key={l.key}
+                                href={l.url}
+                                target="_blank"
+                                rel="noreferrer sponsored"
+                                className="vbook"
+                                onClick={e=>e.stopPropagation()}
+                              >
+                                {l.label}
+                              </a>
+                            ))}
+                          </div>
                         </div>
                       </div>
                     );
@@ -1522,6 +1602,13 @@ Respond with a single JSON object and nothing else:
                   Build the weekend <ChevronRight size={14} strokeWidth={2.5} />
                 </button>
               </div>
+              <p style={{
+                fontSize:"0.72rem", color:"var(--muted)", marginTop:"1.5rem",
+                paddingTop:"1rem", borderTop:"1px solid var(--border)", lineHeight:1.6,
+              }}>
+                Some booking links are affiliate links. If you book through them, Lorette may earn
+                a commission at no extra cost to you. It never changes what we recommend.
+              </p>
             </div>
           )}
 
