@@ -610,7 +610,8 @@ export default function App() {
   const [itinerary, setItinerary] = useState(null);
   const [loadingItin, setLoadingItin] = useState(false);
   const [itinError, setItinError] = useState("");
-  const [fillingDay, setFillingDay] = useState(null);
+  const [fillingDays, setFillingDays] = useState({});
+  const [planBuilding, setPlanBuilding] = useState(false);
   const [emails, setEmails] = useState("");
   const [emailPreview, setEmailPreview] = useState(null);
   const [loadingEmail, setLoadingEmail] = useState(false);
@@ -749,12 +750,12 @@ Give me the shape of this weekend — the title, the day labels, and three tips.
 ${dayCount
   ? `The trip runs ${dayCount} day${dayCount === 1 ? "" : "s"}, so give exactly ${dayCount} day labels, each with its real weekday and date.`
   : `Give 2 or 3 day labels for a typical weekend.`}
-Tips should be things only someone who's done this in ${city} would know — not generic advice about booking ahead.
+Tips should be things only someone who's done this in ${city} would know — not generic advice about booking ahead. One line each, under 15 words.
 
 Respond with a single JSON object and nothing else:
 {"title": string, "dayLabels": [string], "tips": [string, string, string]}`;
 
-      const skeleton = await callClaude(skeletonPrompt, { maxTokens: 700 });
+      const skeleton = await callClaude(skeletonPrompt, { maxTokens: 500 });
       const labels = Array.isArray(skeleton?.dayLabels) ? skeleton.dayLabels.filter(Boolean) : [];
       if (!labels.length) throw new Error("Claude sent back a plan with no days in it.");
 
@@ -765,45 +766,68 @@ Respond with a single JSON object and nothing else:
       };
       setItinerary(base);
       setLoadingItin(false);
+      setPlanBuilding(true);
 
-      // ── Pass 2: one request per day. Each is small enough to finish well
-      // inside the serverless timeout, and each lands on screen as it arrives.
+      // ── Pass 2: days are written two at a time. Sequential was safe but
+      // slow on a 5-day trip; four at once is what tripped rate limits during
+      // venue loading. Two is the middle ground.
+      const CONCURRENCY = 2;
+      let cursor = 0;
       let filled = 0;
-      for (let i = 0; i < labels.length; i++) {
-        setFillingDay(i);
-        const dayPrompt = `${context}
+      let terminal = null;
+
+      const worker = async () => {
+        while (true) {
+          const i = cursor++;
+          if (i >= labels.length || terminal) return;
+
+          setFillingDays(prev => ({ ...prev, [i]: true }));
+          const dayPrompt = `${context}
 
 ${voice}
 
 Write the schedule for just this one day: "${labels[i]}" (day ${i + 1} of ${labels.length}).
 ${i === 0 ? "This is arrival day — it starts partway through, not first thing in the morning." : ""}${i === labels.length - 1 && labels.length > 1 ? "This is departure day — keep it short and end before checkout." : ""}
-Give 4 to 6 time blocks. Notes carry real information: what to wear, when to leave, what to order, what fills up.
+Give 4 or 5 time blocks.
+
+Keep it tight. Activity names are 2 to 5 words. Notes are one short line under 12 words — the single most useful thing to know, like what to wear, when to leave, or what to order. Skip a note entirely rather than padding it.
 
 Respond with a single JSON object and nothing else:
 {"timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}`;
 
-        try {
-          const day = await callClaude(dayPrompt, { maxTokens: 1400 });
-          const blocks = Array.isArray(day?.timeBlocks) ? day.timeBlocks : [];
-          if (blocks.length) {
-            filled++;
-            setItinerary(prev => {
-              if (!prev) return prev;
-              const next = structuredClone ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
-              next.days[i].timeBlocks = blocks;
-              return next;
-            });
+          try {
+            const day = await callClaude(dayPrompt, { maxTokens: 800 });
+            const blocks = Array.isArray(day?.timeBlocks) ? day.timeBlocks : [];
+            if (blocks.length) {
+              filled++;
+              setItinerary(prev => {
+                if (!prev) return prev;
+                const next = structuredClone ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
+                if (next.days[i]) next.days[i].timeBlocks = blocks;
+                return next;
+              });
+            }
+          } catch (dayErr) {
+            // Out of credit or a bad key won't fix itself — stop the whole run
+            if (isTerminal(dayErr.message)) terminal = dayErr;
+            // Otherwise leave this day empty and let the others finish
+          } finally {
+            setFillingDays(prev => ({ ...prev, [i]: false }));
           }
-        } catch (dayErr) {
-          if (isTerminal(dayErr.message)) throw dayErr;
-          // One bad day shouldn't sink the whole plan — leave it empty and continue
         }
-      }
-      setFillingDay(null);
+      };
 
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, labels.length) }, worker)
+      );
+
+      setPlanBuilding(false);
+      setFillingDays({});
+      if (terminal) throw terminal;
       if (filled === 0) throw new Error("The days came back empty. Try again.");
     } catch(e) {
-      setFillingDay(null);
+      setPlanBuilding(false);
+      setFillingDays({});
       setItinerary(null);
       setItinError(e.message || "Something went wrong.");
     }
@@ -1551,12 +1575,12 @@ Respond with a single JSON object and nothing else:
                           display:"flex", alignItems:"center", gap:"0.6rem",
                           padding:"0.85rem 0", color:"var(--muted)", fontSize:"0.82rem",
                         }}>
-                          {fillingDay === di ? (
+                          {fillingDays[di] ? (
                             <>
                               <span className="g-spin" style={{width:16,height:16,borderWidth:2}} />
                               <span>Writing this day…</span>
                             </>
-                          ) : fillingDay !== null && di > fillingDay ? (
+                          ) : planBuilding ? (
                             <span>Up next…</span>
                           ) : (
                             <span>Nothing here yet.</span>
