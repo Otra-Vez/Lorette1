@@ -790,13 +790,13 @@ Write the schedule for just this one day: "${labels[i]}" (day ${i + 1} of ${labe
 ${i === 0 ? "This is arrival day — it starts partway through, not first thing in the morning." : ""}${i === labels.length - 1 && labels.length > 1 ? "This is departure day — keep it short and end before checkout." : ""}
 Give 4 or 5 time blocks.
 
-Keep it tight. Activity names are 2 to 5 words. Notes are one short line under 12 words — the single most useful thing to know, like what to wear, when to leave, or what to order. Skip a note entirely rather than padding it.
+Keep activity names to 2 to 5 words. Notes are one or two short sentences, under 25 words — real detail worth knowing: what to order, what to wear, when to leave, what fills up, what to ask for. Specific over general. Skip the note entirely rather than padding it with filler.
 
 Respond with a single JSON object and nothing else:
 {"timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}`;
 
           try {
-            const day = await callClaude(dayPrompt, { maxTokens: 800 });
+            const day = await callClaude(dayPrompt, { maxTokens: 1000 });
             const blocks = Array.isArray(day?.timeBlocks) ? day.timeBlocks : [];
             if (blocks.length) {
               filled++;
