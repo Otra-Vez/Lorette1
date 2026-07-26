@@ -40,27 +40,38 @@ function withAffiliate(providerKey, url) {
   return url + (url.includes("?") ? "&" : "?") + `${a.param}=${encodeURIComponent(a.id)}`;
 }
 
-// Returns the booking options for a venue. Stay gets two, since a group of 10
-// wants a whole house as often as it wants hotel rooms.
+// Airbnb searches a city, not a specific listing, so it belongs above the hotel
+// cards rather than on one. Filters are set for how these groups actually stay:
+// the whole place, a bed for everyone, enough bedrooms to be livable.
+function airbnbSearchUrl({ city, checkIn, checkOut, guests }) {
+  const n = Math.max(1, parseInt(guests, 10) || 6);
+  const params = new URLSearchParams({
+    checkin: checkIn,
+    checkout: checkOut,
+    adults: String(n),
+    min_beds: String(n),                       // everyone gets a bed
+    min_bedrooms: String(Math.min(8, Math.ceil(n / 3))), // groups share rooms
+  });
+  // Entire place only — a private room defeats the point of staying together
+  params.append("room_types[]", "Entire home/apt");
+  return withAffiliate(
+    "airbnb",
+    `https://www.airbnb.com/s/${encodeURIComponent(city)}/homes?${params.toString()}`
+  );
+}
+
+// Returns the booking options for a venue.
 function bookingLinks(tab, item, ctx) {
   const { city, checkIn, checkOut, guests } = ctx;
   const q = encodeURIComponent(`${item.name} ${city}`);
 
   if (tab === "stay") {
-    return [
-      {
-        key: "booking",
-        label: "Book",
-        url: withAffiliate("booking",
-          `https://www.booking.com/searchresults.html?ss=${q}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${guests}`),
-      },
-      {
-        key: "airbnb",
-        label: "Airbnb",
-        url: withAffiliate("airbnb",
-          `https://www.airbnb.com/s/${encodeURIComponent(city)}/homes?checkin=${checkIn}&checkout=${checkOut}&adults=${guests}`),
-      },
-    ];
+    return [{
+      key: "booking",
+      label: "Book",
+      url: withAffiliate("booking",
+        `https://www.booking.com/searchresults.html?ss=${q}&checkin=${checkIn}&checkout=${checkOut}&group_adults=${guests}`),
+    }];
   }
 
   if (tab === "activities") {
@@ -1141,6 +1152,36 @@ Respond with a single JSON object and nothing else:
         .day-pill .ed:hover { background:rgba(255,255,255,0.18); box-shadow:0 0 0 4px rgba(255,255,255,0.18); }
         .day-pill .ed-input { background:var(--ink); color:#fff; border-color:rgba(255,255,255,0.5); }
 
+        /* ── STAY BANNER ── */
+        .stay-banner {
+          display:flex; align-items:center; justify-content:space-between; gap:1rem;
+          padding:0.95rem 1.15rem; margin-bottom:1rem;
+          border:1.5px solid var(--border); border-radius:16px;
+          background:linear-gradient(135deg, rgba(255,60,172,0.04), rgba(124,58,237,0.05));
+          text-decoration:none; color:inherit;
+          transition:border-color 0.18s, transform 0.18s, box-shadow 0.18s;
+        }
+        .stay-banner:hover {
+          border-color:rgba(124,58,237,0.3);
+          transform:translateY(-1px);
+          box-shadow:var(--shadow-sm);
+        }
+        .stay-banner-title {
+          font-family:'Bricolage Grotesque',sans-serif;
+          font-weight:700; font-size:1rem; letter-spacing:-0.01em; color:var(--ink);
+        }
+        .stay-banner-sub { font-size:0.8rem; color:var(--muted); margin-top:0.15rem; line-height:1.5; }
+        .stay-banner-cta {
+          display:inline-flex; align-items:center; gap:0.25rem;
+          font-size:0.76rem; font-weight:700; letter-spacing:0.02em;
+          color:#fff; background:var(--grad);
+          padding:0.45rem 0.9rem; border-radius:50px;
+          white-space:nowrap; flex-shrink:0;
+        }
+        @media(max-width:520px){
+          .stay-banner { flex-direction:column; align-items:flex-start; gap:0.75rem; }
+        }
+
         /* ── DATE RANGE PICKER ── */
         .dr-wrap { position:relative; }
         .dr-trigger {
@@ -1528,6 +1569,33 @@ Respond with a single JSON object and nothing else:
                   </button>
                 ))}
               </div>
+
+              {activeTab === "stay" && (() => {
+                const checkIn = details.startDate || new Date().toISOString().split("T")[0];
+                const checkOut = details.endDate
+                  || new Date(new Date(checkIn).getTime()+2*86400000).toISOString().split("T")[0];
+                const n = details.groupSize?.replace(/\D/g,"") || "6";
+                const beds = Math.max(1, parseInt(n,10) || 6);
+                return (
+                  <a
+                    href={airbnbSearchUrl({ city, checkIn, checkOut, guests: n })}
+                    target="_blank"
+                    rel="noreferrer sponsored"
+                    className="stay-banner"
+                  >
+                    <div>
+                      <div className="stay-banner-title">Rather have one house?</div>
+                      <div className="stay-banner-sub">
+                        Search Airbnb for whole homes in {city} — {beds} bed
+                        {beds === 1 ? "" : "s"}, your dates already applied.
+                      </div>
+                    </div>
+                    <span className="stay-banner-cta">
+                      Browse Airbnb <ChevronRight size={13} strokeWidth={2.5} />
+                    </span>
+                  </a>
+                );
+              })()}
 
               {loadingTabs[activeTab] ? <Spinner /> : filtered(activeTab).length===0 ? (
                 <div className="empty">
