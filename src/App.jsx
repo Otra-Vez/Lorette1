@@ -51,6 +51,7 @@ function airbnbSearchUrl({ city, checkIn, checkOut, guests }) {
     adults: String(n),
     min_beds: String(n),                       // everyone gets a bed
     min_bedrooms: String(Math.min(8, Math.ceil(n / 3))), // groups share rooms
+    min_bathrooms: String(airbnbBathrooms(n)), // never fewer than two
   });
   // Entire place only — a private room defeats the point of staying together
   params.append("room_types[]", "Entire home/apt");
@@ -58,6 +59,18 @@ function airbnbSearchUrl({ city, checkIn, checkOut, guests }) {
     "airbnb",
     `https://www.airbnb.com/s/${encodeURIComponent(city)}/homes?${params.toString()}`
   );
+}
+
+// Bathrooms are the thing nobody budgets for until the whole group is getting
+// ready at once. Tiered rather than a formula, and deliberately capped at five:
+// filters past that match almost no listings and the search comes back empty,
+// which helps a host less than a slightly loose result she can scan herself.
+function airbnbBathrooms(guests) {
+  if (guests <= 3) return 1;
+  if (guests <= 5) return 2;   // 6 lands in the next tier, per "6 or larger = 3"
+  if (guests <= 9) return 3;
+  if (guests <= 12) return 4;
+  return 5;
 }
 
 // Returns the booking options for a venue.
@@ -1587,7 +1600,7 @@ Respond with a single JSON object and nothing else:
                       <div className="stay-banner-title">Rather have one house?</div>
                       <div className="stay-banner-sub">
                         Search Airbnb for whole homes in {city} — {beds} bed
-                        {beds === 1 ? "" : "s"}, your dates already applied.
+                        {beds === 1 ? "" : "s"}, {airbnbBathrooms(beds)}+ baths, your dates already applied.
                       </div>
                     </div>
                     <span className="stay-banner-cta">
