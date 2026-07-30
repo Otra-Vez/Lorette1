@@ -373,6 +373,45 @@ function DateRangeField({ startDate, endDate, onChange }) {
   );
 }
 
+// Shown while a day is being written. These are atmosphere, not status — the
+// venues are already chosen by this point, so narrating a search would
+// undercut the whole premise. Warm and knowing, never novelty.
+const DAY_QUIPS = [
+  "The group chat is about to get loud.",
+  "She doesn't have to think about a single thing this weekend.",
+  "This is the one people bring up at the wedding.",
+  "Someone's getting a nickname by the end of this.",
+  "Nobody's checking work email.",
+  "The shoes will be a mistake. Worth it.",
+  "There'll be one photo everyone loves except her.",
+  "Leaving room in the suitcase for two outfits a day.",
+  "She'll try to help. Don't let her.",
+  "The first toast is already handled.",
+  "Everyone says they'll pace themselves.",
+  "The getting-ready playlist matters more than you think.",
+  "She gets the big bed. Obviously.",
+  "Someone will insist on a group photo. Let them.",
+  "The hard part is already done.",
+  "Nobody has to make a decision but her.",
+  "This is the weekend she'll talk about for years.",
+  "The photos will be unusable and perfect.",
+  "You're going to look like you had this handled all along.",
+];
+
+function LoadingQuip() {
+  const [i, setI] = useState(() => Math.floor(Math.random() * DAY_QUIPS.length));
+  useEffect(() => {
+    const id = setInterval(() => setI(n => (n + 1) % DAY_QUIPS.length), 2800);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="quip-row">
+      <span className="g-spin" style={{ width: 16, height: 16, borderWidth: 2 }} />
+      <span className="quip-text" key={i}>{DAY_QUIPS[i]}</span>
+    </div>
+  );
+}
+
 function Spinner() {
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"0.9rem", padding:"3rem 1rem" }}>
@@ -832,7 +871,7 @@ Budget: ${details.budget}
 Spots they picked: ${venueList}
 ${details.notes ? `What she's into: ${details.notes}` : ""}`;
 
-    const voice = `Write in the voice of a friend who lives in ${city} and has already made the reservations — warm, specific, unbothered. Skip filler like "enjoy the city" or "celebrate the bride"; say the actual thing. Ground everything in real ${city} neighborhoods and venues.`;
+    const voice = `You are the host, writing to the friends coming on this trip. Not to yourself, and not to a reader — to them. Say "we" and "you." Ground everything in real ${city} neighborhoods and venues, like someone who lives there and has already made the reservations. Warm, specific, unbothered. Skip filler like "enjoy the city" or "celebrate the bride"; say the actual thing.`;
 
     const isTerminal = (msg) => /credit|balance|quota|API key/i.test(msg || "");
 
@@ -847,7 +886,7 @@ Give me the shape of this weekend — the title, the day labels, and three tips.
 ${dayCount
   ? `The trip runs ${dayCount} day${dayCount === 1 ? "" : "s"}, so give exactly ${dayCount} day labels, each with its real weekday and date.`
   : `Give 2 or 3 day labels for a typical weekend.`}
-Tips should be things only someone who's done this in ${city} would know — not generic advice about booking ahead. One line each, under 15 words.
+Tips are for you, the host — the logistics your guests don't need to see. Things only someone who's done this in ${city} would know: what to book early, where the group will bottleneck, what costs more than expected. One line each, under 15 words.
 
 Respond with a single JSON object and nothing else:
 {"title": string, "dayLabels": [string], "tips": [string, string, string]}`;
@@ -887,13 +926,13 @@ Write the schedule for just this one day: "${labels[i]}" (day ${i + 1} of ${labe
 ${i === 0 ? "This is arrival day — it starts partway through, not first thing in the morning." : ""}${i === labels.length - 1 && labels.length > 1 ? "This is departure day — keep it short and end before checkout." : ""}
 Give 4 or 5 time blocks.
 
-Keep activity names to 2 to 5 words. Notes are one or two short sentences, under 25 words — real detail worth knowing: what to order, what to wear, when to leave, what fills up, what to ask for. Specific over general. Skip the note entirely rather than padding it with filler.
+Keep activity names to 2 to 5 words. Notes are one or two sentences, 20 to 35 words — written to your friends, telling them what they'd actually want to know before they show up: what to wear, what to order, how long the walk is, whether to eat beforehand, what the place is like. Include the small insider thing that makes it feel handled. Never write logistics meant for you rather than them — no "book two weeks ahead," no "confirm the reservation." Skip the note entirely rather than padding it.
 
 Respond with a single JSON object and nothing else:
 {"timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}`;
 
           try {
-            const day = await callClaude(dayPrompt, { maxTokens: 1000 });
+            const day = await callClaude(dayPrompt, { maxTokens: 1200 });
             const blocks = Array.isArray(day?.timeBlocks) ? day.timeBlocks : [];
             if (blocks.length) {
               filled++;
@@ -1164,6 +1203,17 @@ Respond with a single JSON object and nothing else:
         }
         .day-pill .ed:hover { background:rgba(255,255,255,0.18); box-shadow:0 0 0 4px rgba(255,255,255,0.18); }
         .day-pill .ed-input { background:var(--ink); color:#fff; border-color:rgba(255,255,255,0.5); }
+
+        /* ── LOADING QUIPS ── */
+        .quip-row { display:flex; align-items:center; gap:0.6rem; min-height:22px; }
+        .quip-text {
+          font-size:0.83rem; color:var(--muted);
+          animation:quipIn 0.45s ease;
+        }
+        @keyframes quipIn {
+          from { opacity:0; transform:translateY(3px); }
+          to   { opacity:1; transform:translateY(0); }
+        }
 
         /* ── STAY BANNER ── */
         .stay-banner {
@@ -1699,7 +1749,10 @@ Respond with a single JSON object and nothing else:
               {loadingItin ? (
                 <div className="lw">
                   <div className="g-spin" />
-                  <p style={{fontSize:"0.72rem",fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:"var(--muted)"}}>Building the plan</p>
+                  <p style={{fontSize:"0.72rem",fontWeight:600,letterSpacing:"0.14em",textTransform:"uppercase",color:"var(--muted)"}}>Shaping the weekend</p>
+                  <p style={{fontSize:"0.85rem",color:"var(--muted)",marginTop:"-0.4rem"}}>
+                    Days will fill in one by one as they're written.
+                  </p>
                 </div>
               ) : itinError ? (
                 <div style={{textAlign:"center",padding:"3rem 1rem"}}>
@@ -1744,10 +1797,7 @@ Respond with a single JSON object and nothing else:
                           padding:"0.85rem 0", color:"var(--muted)", fontSize:"0.82rem",
                         }}>
                           {fillingDays[di] ? (
-                            <>
-                              <span className="g-spin" style={{width:16,height:16,borderWidth:2}} />
-                              <span>Writing this day…</span>
-                            </>
+                            <LoadingQuip />
                           ) : planBuilding ? (
                             <span>Up next…</span>
                           ) : (
