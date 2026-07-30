@@ -73,12 +73,20 @@ function airbnbBathrooms(guests) {
   return 5;
 }
 
+// Sends a link out through lorette.ai/api/go so iOS opens it in the browser
+// rather than handing it to a partner app that ignores the query string.
+// Absolute rather than relative so it also works from a preview environment.
+function viaRedirect(url) {
+  return `https://lorette.ai/api/go?u=${encodeURIComponent(url)}`;
+}
+
 // Returns the booking options for a venue.
 function bookingLinks(tab, item, ctx) {
   const { city, checkIn, checkOut, guests } = ctx;
   const q = encodeURIComponent(`${item.name} ${city}`);
 
   if (tab === "stay") {
+    // Booking.com's app reads these parameters, so let it open the app.
     return [{
       key: "booking",
       label: "Book",
@@ -88,9 +96,8 @@ function bookingLinks(tab, item, ctx) {
   }
 
   if (tab === "activities") {
-    // No affiliate here on purpose. Activities are places, not bookable tours,
-    // so a tour marketplace mostly returns nothing for them. A link that finds
-    // the place beats a link that earns a commission but doesn't work.
+    // Activities are places, not bookable tours, so a tour marketplace
+    // returns nothing useful for them. A plain search finds the place.
     return [{
       key: "search",
       label: "View",
@@ -98,12 +105,12 @@ function bookingLinks(tab, item, ctx) {
     }];
   }
 
-  // Dining and bars — reservations are the first affiliate category to wire up
+  // The OpenTable app drops the query string, so this one takes the detour.
   return [{
     key: "opentable",
     label: "Reserve",
-    url: withAffiliate("opentable",
-      `https://www.opentable.com/s?term=${encodeURIComponent(item.name)}&covers=${guests}&dateTime=${checkIn}T19%3A00`),
+    url: viaRedirect(withAffiliate("opentable",
+      `https://www.opentable.com/s?term=${encodeURIComponent(item.name)}&covers=${guests}&dateTime=${checkIn}T19%3A00`)),
   }];
 }
 
