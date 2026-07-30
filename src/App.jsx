@@ -1151,7 +1151,9 @@ Respond with a single JSON object and nothing else:
           border:1.5px solid var(--border);
           border-radius:12px;
           font-family:'Plus Jakarta Sans',sans-serif;
-          font-size:0.92rem; font-weight:500;
+          /* 16px minimum — iOS Safari zooms the whole page when you focus an
+             input smaller than this, which is jarring and hard to undo. */
+          font-size:1rem; font-weight:500;
           background:var(--bg); color:var(--ink);
           outline:none;
           transition:border-color 0.18s, box-shadow 0.18s;
@@ -1253,7 +1255,7 @@ Respond with a single JSON object and nothing else:
           border:1.5px solid var(--border); border-radius:12px;
           background:var(--bg); color:var(--ink);
           font-family:'Plus Jakarta Sans',sans-serif;
-          font-size:0.92rem; font-weight:600;
+          font-size:1rem; font-weight:600;
           cursor:pointer; text-align:left;
           transition:border-color 0.18s, box-shadow 0.18s;
         }
@@ -1489,11 +1491,58 @@ Respond with a single JSON object and nothing else:
         /* ── LOADING WRAP ── */
         .lw { display:flex; flex-direction:column; align-items:center; gap:1rem; padding:5rem 1rem; }
 
+        /* Long venue names shouldn't push the card sideways */
+        .vname, .itin-venue, .itin-act, .stay-banner-title { overflow-wrap:break-word; }
+
+        /* Kill the grey flash iOS paints over tapped elements */
+        button, a, .ed, .dr-day, .tab, .chip, .dest-chip, .vcard {
+          -webkit-tap-highlight-color: transparent;
+        }
+
         @media(max-width:600px){
           .main { padding:1.5rem 1rem; }
           .vgrid { grid-template-columns:1fr; }
           .city-input-wrap { flex-direction:column; }
           .pbs-label { display:none; }
+
+          /* Inline editing inherits the font of whatever it replaces, and some
+             of that text is 11px. Force 16px on touch so tapping to edit an
+             itinerary line doesn't zoom the page. Slight jump beats that. */
+          .ed-input { font-size:16px; }
+
+          /* Touch targets. Apple's guidance is ~44px; these were nearer 24.
+             min-height is more reliable than padding alone, and pill shapes
+             absorb the extra height without looking bloated. */
+          .vbook {
+            min-height:40px; padding:0 1rem; font-size:0.78rem;
+            display:inline-flex; align-items:center; justify-content:center;
+          }
+          .chip {
+            min-height:40px; padding:0 1rem; font-size:0.85rem;
+            display:inline-flex; align-items:center; justify-content:center;
+          }
+          .tab { min-height:42px; padding:0 1.1rem; font-size:0.84rem; }
+          .dest-chip {
+            min-height:42px; padding:0 1.1rem; font-size:0.86rem;
+            display:inline-flex; align-items:center; justify-content:center;
+          }
+          .dr-nav { width:40px; height:40px; }
+          .dr-clear { min-height:40px; padding:0 0.5rem; font-size:0.8rem; }
+          .btn { min-height:46px; padding:0 1.6rem; font-size:0.85rem; }
+
+          /* Give the tapped area on a venue card some breathing room */
+          .vcard { padding:1.25rem; }
+          .vfoot { margin-top:0.4rem; }
+
+          /* Calendar cells: fill the width so days are comfortable to hit */
+          .dr-pop { width:calc(100vw - 2rem); left:50%; transform:translateX(-50%); }
+        }
+
+        /* Extra room on genuinely small phones */
+        @media(max-width:380px){
+          .wordmark { font-size:2.9rem; }
+          .itin-time { min-width:52px; font-size:0.7rem; }
+          .itin-row { gap:0.6rem; }
         }
       `}</style>
 
