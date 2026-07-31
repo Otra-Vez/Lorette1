@@ -73,52 +73,21 @@ function airbnbBathrooms(guests) {
   return 5;
 }
 
-// Builds an OpenTable restaurant URL from the venue name, or returns null if
-// the name isn't plain enough to guess reliably.
-//
-// Their pages are /r/{name}-{city}, and a correct slug opens the app at the
-// restaurant instead of an empty search. A *wrong* slug is a 404 inside the
-// app with no way forward, which is worse than a search — so this only fires
-// on names where the transformation is near-certain, and everything else
-// falls through to search. Party size and date are lost either way; carrying
-// those needs OpenTable's restaurant ID, which comes with API access.
-//
-// Verified: "Commander's Palace" and "Cure" resolve. "Compère Lapin" does
-// not — accented characters are handled differently than a naive slug guesses.
-function opentableSlug(name, city) {
-  if (!name || !city) return null;
-
-  // Apostrophes are simply dropped in their slugs (commanders-palace).
-  const cleaned = name.replace(/['’]/g, "").trim();
-
-  // Anything left beyond plain letters, numbers and spaces — accents,
-  // ampersands, slashes, periods — makes the slug unpredictable.
-  if (!/^[A-Za-z0-9 ]+$/.test(cleaned)) return null;
-
-  // A leading "The" is inconsistently kept or dropped.
-  if (/^the\s/i.test(cleaned)) return null;
-
-  // Long names are the ones most likely to carry a disambiguating suffix.
-  const words = cleaned.split(/\s+/);
-  if (words.length > 4) return null;
-
-  // Cities with punctuation slug unpredictably — "Washington, D.C." could be
-  // washington-dc or washington-d-c, and guessing wrong gives a 404.
-  if (!/^[A-Za-z ]+$/.test(city.trim())) return null;
-
-  const citySlug = city.trim().toLowerCase().replace(/\s+/g, "-");
-  if (!citySlug) return null;
-
-  return `https://www.opentable.com/r/${words.join("-").toLowerCase()}-${citySlug}`;
-}
 // iOS hands links to an installed app whenever the domain matches, and there
 // is no way to opt out from our side — a redirect page doesn't help, because
 // universal links fire on window.location too. The OpenTable app then ignores
 // the web URL's parameters and opens an empty search.
 //
-// On desktop no app intercepts, so the direct link with party size and date
-// pre-filled works. On touch, we aim at the restaurant's own page when the
-// name is simple enough to build reliably, and fall back to search otherwise.
+// Guessing the restaurant's own URL was tried and removed: OpenTable's slugs
+// vary in ways a venue's name doesn't reveal, so plausible-looking guesses
+// land on "no restaurant found" — a dead end inside the app, and worse than
+// an extra tap. Carrying the restaurant through properly needs OpenTable's
+// own ID, which comes with API access.
+//
+// So on touch, dining goes to a search that resolves to the venue; tapping
+// the OpenTable result from there opens the app at the right restaurant,
+// because that link carries the real slug. On desktop nothing intercepts, so
+// the direct link with party size and date pre-filled still works.
 function isTouchDevice() {
   return typeof window !== "undefined"
     && typeof window.matchMedia === "function"
@@ -151,11 +120,6 @@ function bookingLinks(tab, item, ctx) {
   }
 
   if (isTouchDevice()) {
-    // A correct slug opens the app at the restaurant — one tap instead of two.
-    const slug = opentableSlug(item.name, city);
-    if (slug) {
-      return [{ key: "opentable", label: "Reserve", url: withAffiliate("opentable", slug) }];
-    }
     return [{
       key: "search",
       label: "Reserve",
