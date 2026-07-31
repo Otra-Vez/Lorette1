@@ -73,11 +73,13 @@ function airbnbBathrooms(guests) {
   return 5;
 }
 
-// Sends a link out through lorette.ai/api/go so iOS opens it in the browser
-// rather than handing it to a partner app that ignores the query string.
+// Hands a link off through a static page on lorette.ai so iOS opens it in the
+// browser rather than in a partner app that ignores the query string.
+// Universal links fire on a tapped <a>, not on the window.location navigation
+// that page performs — which is why the parameters survive.
 // Absolute rather than relative so it also works from a preview environment.
 function viaRedirect(url) {
-  return `https://lorette.ai/api/go?u=${encodeURIComponent(url)}`;
+  return `https://lorette.ai/go.html?u=${encodeURIComponent(url)}`;
 }
 
 // Returns the booking options for a venue.
