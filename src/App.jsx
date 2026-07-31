@@ -817,6 +817,13 @@ export default function App() {
   const [loadingEmail, setLoadingEmail] = useState(false);
   const [sent, setSent] = useState(false);
 
+  const VENUE_CRITERIA = {
+    dining: `Pick places that actually work for a bachelorette group of this size. That means: seats a large party without splitting them across the room, takes reservations, has some energy to it rather than a hushed dining room, and is somewhere worth getting dressed up for. A strong cocktail list and a room that photographs well both matter here. Favour places groups genuinely book for a celebration over places that are merely well reviewed — a quiet tasting-menu counter can be the best restaurant in town and still be wrong for twelve people. Spread them across price points and neighbourhoods.`,
+    bars: `Pick bars a group would actually take over for a night: room to stand together, a scene rather than a quiet nightcap spot, and somewhere that won't turn away a party this size. Mix the types — a rooftop, a proper cocktail bar, somewhere with dancing or live music, a dive with character. Favour places locals rate over places that are only busy with tourists.`,
+    stay: `Pick places that suit a group travelling together: enough rooms in one property, somewhere central to the going-out neighbourhoods, and a lobby or bar worth spending time in. Range across price points from reasonable to splurge.`,
+    activities: `Pick things a group of this size can actually do together and would want to — daytime activities that are fun rather than dutiful, and that suit a celebration. Skip anything requiring silence or single-file lines. Mix active and relaxed.`,
+  };
+
   async function fetchTab(tab, targetCity) {
     const forCity = targetCity || cityRef.current || city;
     if (!forCity) return; // nothing to search for yet
@@ -838,7 +845,11 @@ export default function App() {
       setTabErrors(prev => ({ ...prev, [tab]: "" }));
       try {
         const result = await callClaude(
-          `Give me 6 real ${cat} recommendations for a bachelorette weekend in ${forCity}. Return a JSON array. Each object: name, description (one short sentence, under 20 words), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array.`,
+          `Give me 6 real ${cat} in ${forCity} for a bachelorette weekend. Group size: ${details.groupSize || "8 to 12 guests"}.
+
+${VENUE_CRITERIA[tab]}
+
+Only real, currently operating places — no invented names. Return a JSON array. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array.`,
           { maxTokens: 2000 }
         );
         if (!isCurrent()) return;
