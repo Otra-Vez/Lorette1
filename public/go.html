@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Opening…</title>
+  <style>
+    body {
+      margin: 0; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      background: #fff; color: #9399A6;
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      font-size: 0.9rem; text-align: center; padding: 2rem;
+    }
+    .spin {
+      width: 28px; height: 28px; margin: 0 auto 1rem;
+      border: 2.5px solid #F0F0F5;
+      border-top-color: #FF3CAC; border-right-color: #7C3AED;
+      border-radius: 50%; animation: s 0.9s linear infinite;
+    }
+    @keyframes s { to { transform: rotate(360deg); } }
+    a { color: #7C3AED; }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="spin"></div>
+    <div id="msg">Opening…</div>
+  </div>
+
+  <script>
+    // Handing off a link to a partner site without letting iOS give it to that
+    // partner's app. Universal links fire on a tapped <a>, but not on a
+    // window.location navigation — so the query string survives and the user
+    // lands on the right page instead of an empty in-app search.
+    (function () {
+      var ALLOWED = [
+        'opentable.com', 'www.opentable.com',
+        'booking.com', 'www.booking.com',
+        'airbnb.com', 'www.airbnb.com'
+      ];
+
+      function fail(text) {
+        document.getElementById('msg').textContent = text;
+        document.querySelector('.spin').style.display = 'none';
+      }
+
+      var raw = new URLSearchParams(window.location.search).get('u');
+      if (!raw) return fail('Nothing to open.');
+
+      var target;
+      try { target = new URL(raw); } catch (e) { return fail('That link looks wrong.'); }
+
+      // Without this the page is an open redirect — anyone could send a
+      // lorette.ai link that lands on a phishing site.
+      if (target.protocol !== 'https:' || ALLOWED.indexOf(target.hostname) === -1) {
+        return fail('That link goes somewhere we do not open.');
+      }
+
+      // replace() rather than assign() so Back returns to Lorette, not here
+      window.location.replace(target.toString());
+
+      // If something blocks the automatic hop, give them a way through
+      setTimeout(function () {
+        var m = document.getElementById('msg');
+        m.innerHTML = 'Still here? <a href="' + target.toString().replace(/"/g, '&quot;') + '">Tap to continue</a>';
+        document.querySelector('.spin').style.display = 'none';
+      }, 2500);
+    })();
+  </script>
+</body>
+</html>
