@@ -73,13 +73,19 @@ function airbnbBathrooms(guests) {
   return 5;
 }
 
-// Hands a link off through a static page on lorette.ai so iOS opens it in the
-// browser rather than in a partner app that ignores the query string.
-// Universal links fire on a tapped <a>, not on the window.location navigation
-// that page performs — which is why the parameters survive.
-// Absolute rather than relative so it also works from a preview environment.
-function viaRedirect(url) {
-  return `https://lorette.ai/go.html?u=${encodeURIComponent(url)}`;
+// iOS hands links to an installed app whenever the domain matches, and there
+// is no way to opt out from our side — a redirect page doesn't help, because
+// universal links fire on window.location too. The OpenTable app then ignores
+// the web URL's parameters and opens an empty search.
+//
+// So on touch devices, dining links go to a search that resolves to the venue.
+// Tapping through from there reaches the restaurant's actual OpenTable page,
+// which the app *can* open correctly. On desktop, where no app intercepts,
+// the direct link with party size and date pre-filled still works.
+function isTouchDevice() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(pointer: coarse)").matches;
 }
 
 // Returns the booking options for a venue.
@@ -88,7 +94,7 @@ function bookingLinks(tab, item, ctx) {
   const q = encodeURIComponent(`${item.name} ${city}`);
 
   if (tab === "stay") {
-    // Booking.com's app reads these parameters, so let it open the app.
+    // Booking.com's app reads these parameters, so letting it open is fine.
     return [{
       key: "booking",
       label: "Book",
@@ -107,12 +113,19 @@ function bookingLinks(tab, item, ctx) {
     }];
   }
 
-  // The OpenTable app drops the query string, so this one takes the detour.
+  if (isTouchDevice()) {
+    return [{
+      key: "search",
+      label: "Reserve",
+      url: `https://www.google.com/search?q=${encodeURIComponent(`${item.name} ${city} reservations`)}`,
+    }];
+  }
+
   return [{
     key: "opentable",
     label: "Reserve",
-    url: viaRedirect(withAffiliate("opentable",
-      `https://www.opentable.com/s?term=${encodeURIComponent(item.name)}&covers=${guests}&dateTime=${checkIn}T19%3A00`)),
+    url: withAffiliate("opentable",
+      `https://www.opentable.com/s?term=${encodeURIComponent(item.name)}&covers=${guests}&dateTime=${checkIn}T19%3A00`),
   }];
 }
 
