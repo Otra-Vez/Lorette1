@@ -777,8 +777,9 @@ export default function App() {
   const [fillingDays, setFillingDays] = useState({});
   const [planBuilding, setPlanBuilding] = useState(false);
   const [emails, setEmails] = useState("");
-  const [emailPreview, setEmailPreview] = useState(null);
-  const [loadingEmail, setLoadingEmail] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [sendResult, setSendResult] = useState(null);
   const [sent, setSent] = useState(false);
 
   const VENUE_CRITERIA = {
@@ -1021,14 +1022,62 @@ Respond with a single JSON object and nothing else:
     });
   }
 
-  async function draftEmail() {
-    setLoadingEmail(true);
-    const list = emails.split(/[,\n]/).map(e => e.trim()).filter(Boolean);
+  function parseEmails(raw) {
+    return raw.split(/[,\n;]/).map(e => e.trim()).filter(Boolean);
+  }
+
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  async function sendInvites() {
+    const list = parseEmails(emails);
+    setSendError("");
+
+    if (!list.length) {
+      setSendError("Add at least one guest email first.");
+      return;
+    }
+    const bad = list.filter(e => !EMAIL_RE.test(e));
+    if (bad.length) {
+      setSendError(`These don't look right: ${bad.join(", ")}`);
+      return;
+    }
+    if (!itinerary?.days?.some(d => d.timeBlocks?.length)) {
+      setSendError("There's no plan to send yet — build the weekend first.");
+      return;
+    }
+
+    setSending(true);
     try {
-      const result = await callClaude(`Write a bachelorette weekend invite for ${details.brideName||"the bride"} in ${city}. Dates: ${describeDates(details.startDate, details.endDate)||"TBD"}. Guests: ${details.groupSize}. Highlights: ${itinerary?.days?.flatMap(d=>d.timeBlocks?.map(t=>t.venue)).filter(Boolean).slice(0,5).join(", ")||city}. Warm, specific, no filler. Return JSON: { subject, body (HTML) }`);
-      setEmailPreview({ ...result, recipients: list });
-    } catch(e) { setEmailPreview({ subject:"Weekend plans — say yes.", body:"<p>You're going to want to be there.</p>", recipients: list }); }
-    setLoadingEmail(false);
+      const resp = await fetch("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipients: list,
+          itinerary,
+          city,
+          brideName: details.brideName,
+          dateText: describeDates(details.startDate, details.endDate),
+        }),
+      });
+
+      const bodyText = await resp.text();
+      let data;
+      try { data = JSON.parse(bodyText); }
+      catch {
+        throw new Error(
+          resp.status === 404
+            ? "The send endpoint isn't deployed yet."
+            : `Server returned ${resp.status} instead of a result.`
+        );
+      }
+      if (!resp.ok || data?.error) throw new Error(data?.error?.message || `Send failed (${resp.status})`);
+
+      setSendResult(data);
+      setSent(true);
+    } catch (e) {
+      setSendError(e.message || "Couldn't send the invites.");
+    }
+    setSending(false);
   }
 
   const filtered = (tab) => {
@@ -1244,6 +1293,21 @@ Respond with a single JSON object and nothing else:
         }
         .day-pill .ed:hover { background:rgba(255,255,255,0.18); box-shadow:0 0 0 4px rgba(255,255,255,0.18); }
         .day-pill .ed-input { background:var(--ink); color:#fff; border-color:rgba(255,255,255,0.5); }
+
+        /* ── SEND ── */
+        .send-summary {
+          background:rgba(124,58,237,0.05);
+          border:1px solid rgba(124,58,237,0.12);
+          border-radius:12px; padding:0.8rem 1rem; margin-bottom:1rem;
+        }
+        .send-summary-line { font-size:0.9rem; color:var(--ink); }
+        .send-summary-sub { font-size:0.8rem; color:var(--muted); margin-top:0.15rem; }
+        .send-error {
+          font-size:0.85rem; color:#C2255C; line-height:1.5;
+          background:rgba(255,60,172,0.06);
+          border:1px solid rgba(255,60,172,0.18);
+          border-radius:10px; padding:0.65rem 0.85rem; margin-bottom:1rem;
+        }
 
         /* ── LOADING QUIPS ── */
         .quip-row { display:flex; align-items:center; gap:0.6rem; min-height:22px; }
@@ -1970,55 +2034,69 @@ Respond with a single JSON object and nothing else:
           {step==="invites" && (
             <div className="card">
               <p className="card-title">Send invites</p>
-              <p className="card-sub">Add guest emails and Lorette writes a clean invite with the full plan included.</p>
+              <p className="card-sub">Your guests get the full plan — every day, every stop, exactly as it reads here.</p>
               {!sent ? (
                 <>
                   <div className="ig">
                     <label className="il">Guest emails</label>
                     <textarea className="input" style={{minHeight:"110px"}}
                       placeholder={"ashley@email.com\njessica@email.com\n(one per line or comma separated)"}
-                      value={emails} onChange={e=>setEmails(e.target.value)} />
+                      value={emails} onChange={e=>{ setEmails(e.target.value); setSendError(""); }} />
                   </div>
-                  <div className="arow" style={{marginBottom:"1.25rem"}}>
-                    <button className="btn btn-ghost" onClick={()=>setStep("itinerary")}>
+
+                  {(() => {
+                    const list = parseEmails(emails);
+                    const dayCount = itinerary?.days?.filter(d => d.timeBlocks?.length).length || 0;
+                    const stopCount = itinerary?.days?.reduce((n,d) => n + (d.timeBlocks?.length || 0), 0) || 0;
+                    if (!list.length) return null;
+                    return (
+                      <div className="send-summary">
+                        <div className="send-summary-line">
+                          Sending to <strong>{list.length}</strong> guest{list.length===1?"":"s"}
+                        </div>
+                        <div className="send-summary-sub">
+                          {dayCount} day{dayCount===1?"":"s"} · {stopCount} stop{stopCount===1?"":"s"}
+                          {describeDates(details.startDate, details.endDate)
+                            ? ` · ${describeDates(details.startDate, details.endDate)}` : ""}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {sendError && <p className="send-error">{sendError}</p>}
+
+                  <div className="arow">
+                    <button className="btn btn-ghost" onClick={()=>setStep("itinerary")} disabled={sending}>
                       <ArrowLeft size={14} strokeWidth={2} /> Back to plan
                     </button>
-                    <button className="btn btn-outline" onClick={draftEmail} disabled={loadingEmail}>
-                      {loadingEmail?"Drafting…":"Preview invite"}
+                    <button className="btn btn-grad" onClick={sendInvites} disabled={sending}>
+                      {sending ? "Sending…" : "Send the plan"}
                     </button>
                   </div>
-                  {loadingEmail && <Spinner />}
-                  {emailPreview && !loadingEmail && (
-                    <>
-                      <div className="divr">
-                        <div className="divr-line" />
-                        <span className="divr-lbl">Preview</span>
-                        <div className="divr-line" />
-                      </div>
-                      <div className="email-preview">
-                        <div className="email-head">
-                          <div className="email-subj">{emailPreview.subject}</div>
-                          <div className="email-to">{emailPreview.recipients?.join(", ")}</div>
-                        </div>
-                        <div className="email-body" dangerouslySetInnerHTML={{__html:emailPreview.body}} />
-                      </div>
-                      <div className="arow">
-                        <button className="btn btn-grad" onClick={()=>setSent(true)}>Send to all guests</button>
-                        <p className="send-note">* Live sending requires Resend API</p>
-                      </div>
-                    </>
-                  )}
                 </>
               ) : (
                 <div className="sent-wrap">
-                  <div className="sent-badge">Booked</div>
-                  <div className="sent-title">Invites sent.</div>
-                  <p className="sent-sub">Every guest just got the plan. {details.brideName?`${details.brideName}'s`:"The"} weekend is locked in.</p>
+                  <div className="sent-badge">Sent</div>
+                  <div className="sent-title">
+                    {sendResult?.sent === 1 ? "It's on its way." : "They're on their way."}
+                  </div>
+                  <p className="sent-sub">
+                    {sendResult?.sent
+                      ? `${sendResult.sent} guest${sendResult.sent===1?"":"s"} just got the plan.`
+                      : "Your guests just got the plan."}
+                    {" "}{details.brideName?`${details.brideName}'s`:"The"} weekend is locked in.
+                  </p>
+                  {sendResult?.failed?.length > 0 && (
+                    <p className="send-error" style={{marginBottom:"1.5rem"}}>
+                      Couldn't reach: {sendResult.failed.map(f => f.to).join(", ")}
+                    </p>
+                  )}
                   <button className="btn btn-grad" onClick={()=>{
                     setStep("destination"); setCityInput(""); setCity("");
                     setExplore({dining:[],bars:[],stay:[],activities:[]});
                     setSelected({dining:[],bars:[],stay:[],activities:[]});
-                    setItinerary(null); setEmailPreview(null); setSent(false); setEmails("");
+                    setItinerary(null); setSent(false); setEmails("");
+                    setSendResult(null); setSendError("");
                     setTabErrors({}); setItinError(""); setActiveTab("dining");
                     // Without this the next trip thinks every tab is already loaded
                     cityRef.current = "";
