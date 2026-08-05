@@ -10,6 +10,11 @@ const EMOJI_SWAPS = {
 };
 const swapEmoji = (e) => EMOJI_SWAPS[e] || e;
 
+// A schedule of start times reads better than a wall of ranges. Plans made
+// before this was fixed at generation still get cleaned up here.
+const startTimeOnly = (t) =>
+  t ? String(t).split(/\s*(?:[-–—]|\bto\b|\buntil\b)\s*/i)[0].trim() : t;
+
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
 
@@ -27,7 +32,7 @@ function renderItinerary({ itinerary, city, brideName, dateText }) {
     const rows = blocks.map((b) => `
       <tr>
         <td style="padding:0 12px 18px 0;vertical-align:top;white-space:nowrap;">
-          <span style="font-size:13px;font-weight:600;color:#9399A6;">${esc(b.time)}</span>
+          <span style="font-size:13px;font-weight:600;color:#9399A6;">${esc(startTimeOnly(b.time))}</span>
         </td>
         <td style="padding:0 0 18px 0;vertical-align:top;">
           <div style="font-size:15px;font-weight:700;color:#0D0D0D;line-height:1.35;">
@@ -101,7 +106,7 @@ function renderPlainText({ itinerary, city, brideName, dateText }) {
     if (!blocks.length) continue;
     lines.push(String(day.dayLabel || "").toUpperCase(), "");
     for (const b of blocks) {
-      lines.push(`${b.time || ""}  ${b.activity || ""}`.trim());
+      lines.push(`${startTimeOnly(b.time) || ""}  ${b.activity || ""}`.trim());
       if (b.venue) lines.push(`   ${b.venue}`);
       if (b.notes) lines.push(`   ${b.notes}`);
       lines.push("");
