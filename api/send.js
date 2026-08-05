@@ -1,5 +1,15 @@
 export const config = { maxDuration: 30 };
 
+// Claude picks the icons, and occasionally lands on one that's off-brand for
+// this audience. Swapping at render fixes plans already generated, not just
+// new ones.
+const EMOJI_SWAPS = {
+  "🥩": "🍽️",  // steak — wrong read for a bachelorette dinner
+  "🍖": "🍽️",
+  "🥓": "🍽️",
+};
+const swapEmoji = (e) => EMOJI_SWAPS[e] || e;
+
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
 
@@ -21,7 +31,7 @@ function renderItinerary({ itinerary, city, brideName, dateText }) {
         </td>
         <td style="padding:0 0 18px 0;vertical-align:top;">
           <div style="font-size:15px;font-weight:700;color:#0D0D0D;line-height:1.35;">
-            ${b.emoji ? esc(b.emoji) + " " : ""}${esc(b.activity)}
+            ${b.emoji ? esc(swapEmoji(b.emoji)) + " " : ""}${esc(b.activity)}
           </div>
           ${b.venue ? `<div style="font-size:14px;font-weight:600;color:#7C3AED;margin-top:2px;">${esc(b.venue)}</div>` : ""}
           ${b.notes ? `<div style="font-size:14px;color:#5B6070;margin-top:4px;line-height:1.55;">${esc(b.notes)}</div>` : ""}
