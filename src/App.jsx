@@ -455,25 +455,79 @@ const DAY_QUIPS = [
   "You're going to look like you had this handled all along.",
 ];
 
-function LoadingQuip() {
-  const [i, setI] = useState(() => Math.floor(Math.random() * DAY_QUIPS.length));
+// Shown while venues load. Now that the app genuinely checks each place is
+// still open, a few of these say so — it's true, and it explains the wait.
+const VENUE_QUIPS = {
+  dining: [
+    "Checking who's still open…",
+    "The kind of place you book, not wander into.",
+    "Looking for places that will accommodate your group.",
+    "The good ones book out three weeks ahead.",
+    "Somewhere worth getting dressed up for.",
+    "Where the group can take up space.",
+    "One of these becomes the group photo.",
+    "Big table, loud table, ideally.",
+  ],
+  bars: [
+    "Checking who's still pouring…",
+    "The kind of place that stays busy till close.",
+    "Finding room for all of you to stand.",
+    "Somewhere with a scene, not a hush.",
+    "Somewhere with a bartender worth talking to.",
+    "The rooftop is always worth it.",
+    "One of these turns into the late one.",
+    "Nobody wants a quiet nightcap tonight.",
+    "Looking for the place locals actually go.",
+  ],
+  stay: [
+    "Checking who's still taking bookings…",
+    "Somewhere with a lobby worth passing through.",
+    "Somewhere you'd want the lobby photo.",
+    "Close enough to walk home from dinner.",
+    "Room for everyone under one roof.",
+    "The bride gets the good room, obviously.",
+    "Checking what's walkable from here.",
+  ],
+  activities: [
+    "Checking what's still running…",
+    "Something you'd tell people about after.",
+    "Worth the group getting up for.",
+    "Things you'd actually want to do.",
+    "Nothing that requires standing in silence.",
+    "Something for the morning after.",
+    "One of these ends up being the story.",
+    "Fun, not dutiful.",
+  ],
+};
+
+function LoadingQuip({ quips = DAY_QUIPS }) {
+  const [i, setI] = useState(() => Math.floor(Math.random() * quips.length));
   useEffect(() => {
-    const id = setInterval(() => setI(n => (n + 1) % DAY_QUIPS.length), 2800);
+    const id = setInterval(() => setI(n => (n + 1) % quips.length), 2800);
     return () => clearInterval(id);
-  }, []);
+  }, [quips]);
   return (
     <div className="quip-row">
       <span className="g-spin" style={{ width: 16, height: 16, borderWidth: 2 }} />
-      <span className="quip-text" key={i}>{DAY_QUIPS[i]}</span>
+      <span className="quip-text" key={i}>{quips[i]}</span>
     </div>
   );
 }
 
-function Spinner() {
+function Spinner({ quips }) {
+  const list = quips && quips.length ? quips : null;
+  const [i, setI] = useState(() => (list ? Math.floor(Math.random() * list.length) : 0));
+  useEffect(() => {
+    if (!list) return;
+    const id = setInterval(() => setI(n => (n + 1) % list.length), 2800);
+    return () => clearInterval(id);
+  }, [list]);
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"0.9rem", padding:"3rem 1rem" }}>
       <div className="g-spin" />
-      <p style={{ fontSize:"0.72rem", fontWeight:600, letterSpacing:"0.14em", textTransform:"uppercase", color:"var(--muted)" }}>Finding the right spots</p>
+      <p className="quip-text" key={i} style={{ fontSize:"0.85rem", color:"var(--muted)", textAlign:"center", maxWidth:"280px" }}>
+        {list ? list[i] : "Finding the right spots"}
+      </p>
     </div>
   );
 }
@@ -506,13 +560,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // proxy first; if it 404s, fall back to calling the API directly.
 let useDirectApi = false;
 
-async function postMessages({ system, messages, maxTokens, stream }) {
+async function postMessages({ system, messages, maxTokens, stream, tools }) {
   if (!useDirectApi) {
     try {
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, messages, max_tokens: maxTokens, stream }),
+        body: JSON.stringify({ system, messages, max_tokens: maxTokens, stream, tools }),
       });
       // A real function replies with JSON or an event stream. Anything else
       // (an HTML shell, a 404 page) means the route isn't there — checking
@@ -536,6 +590,7 @@ async function postMessages({ system, messages, maxTokens, stream }) {
       max_tokens: maxTokens || 4000,
       system,
       messages,
+      ...(Array.isArray(tools) && tools.length ? { tools } : {}),
       ...(stream ? { stream: true } : {}),
     }),
   });
@@ -724,7 +779,7 @@ async function callClaudeStreaming(prompt, { maxTokens = 4000, onPartial } = {})
   return final;
 }
 
-async function callClaude(prompt, { maxTokens = 4000, retries = 2 } = {}) {
+async function callClaude(prompt, { maxTokens = 4000, retries = 2, tools } = {}) {
   let lastError = new Error("Request failed");
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -734,6 +789,7 @@ async function callClaude(prompt, { maxTokens = 4000, retries = 2 } = {}) {
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: prompt }],
         maxTokens,
+        tools,
       });
 
       const bodyText = await resp.text();
@@ -843,8 +899,13 @@ export default function App() {
 
 ${VENUE_CRITERIA[tab]}
 
-Only real, currently operating places — no invented names. Return a JSON array. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array.`,
-          { maxTokens: 2000 }
+Before you answer, search the web to confirm each place is still open and operating. Permanent closures are the thing to catch — drop anything that has closed and replace it. Don't recommend a place you couldn't confirm.
+
+Return a JSON array. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array — no commentary, no citations.`,
+          {
+            maxTokens: 4000,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
+          }
         );
         if (!isCurrent()) return;
         if (!Array.isArray(result) || result.length === 0) {
@@ -1847,7 +1908,7 @@ Respond with a single JSON object and nothing else:
                 );
               })()}
 
-              {loadingTabs[activeTab] ? <Spinner /> : filtered(activeTab).length===0 ? (
+              {loadingTabs[activeTab] ? <Spinner quips={VENUE_QUIPS[activeTab]} /> : filtered(activeTab).length===0 ? (
                 <div className="empty">
                   {tabErrors[activeTab] ? (
                     <>
