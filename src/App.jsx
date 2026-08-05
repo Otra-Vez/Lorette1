@@ -94,6 +94,35 @@ function isTouchDevice() {
     && window.matchMedia("(pointer: coarse)").matches;
 }
 
+// A "stop" is somewhere the group is actually going. Travel, check-in,
+// luggage and getting-ready shouldn't inflate the count on the send screen.
+//
+// Claude tags each block, and the tag is trusted for anything ambiguous. But
+// a few words mean logistics no matter how the block is framed — a "Farewell
+// checkout" got tagged as a stop, which is what prompted this — so those
+// override the tag. Everything else without a tag falls through to the
+// broader keyword list, which is a net rather than a rule: it reads the
+// activity text, so unusual phrasing can still slip past.
+const DEFINITELY_LOGISTICS = /\b(check[\s-]?in|check[\s-]?out|checkout|luggage|bags|airport|flight|shuttle|transfer)\b/i;
+
+const LOGISTICS_HINTS = /\b(check[\s-]?in|check[\s-]?out|checkout|arriv|depart|land|fly|flight|airport|drive|driving|travel|transfer|shuttle|ferry|train|taxi|uber|lyft|rideshare|luggage|bags|drop off|drop-off|pack|unpack|settle in|get ready|getting ready|freshen up|rest|nap|downtime|regroup|head (?:back|home|out)|leave for|wake up|shower)\b/i;
+
+function isStop(block) {
+  if (!block) return false;
+  const text = `${block.activity || ""} ${block.venue || ""}`;
+  if (DEFINITELY_LOGISTICS.test(text)) return false;
+  if (block.kind === "stop") return true;
+  if (block.kind === "logistics") return false;
+  return !LOGISTICS_HINTS.test(text);
+}
+
+function countStops(itinerary) {
+  return (itinerary?.days || []).reduce(
+    (n, d) => n + (d.timeBlocks || []).filter(isStop).length,
+    0
+  );
+}
+
 // Returns the booking options for a venue.
 function bookingLinks(tab, item, ctx) {
   const { city, checkIn, checkOut, guests } = ctx;
@@ -964,12 +993,18 @@ ${voice}
 
 Write the schedule for just this one day: "${labels[i]}" (day ${i + 1} of ${labels.length}).
 ${i === 0 ? "This is arrival day — it starts partway through, not first thing in the morning." : ""}${i === labels.length - 1 && labels.length > 1 ? "This is departure day — keep it short and end before checkout." : ""}
+
+Don't assume how the group is getting around. Most fly in and use rideshares, so skip anything about cars, parking, valet, or driving unless the plan clearly needs it.
 Give 4 or 5 time blocks.
 
 Keep activity names to 2 to 5 words. Notes are one or two sentences, 20 to 35 words — written to your friends, telling them what they'd actually want to know before they show up: what to wear, what to order, how long the walk is, whether to eat beforehand, what the place is like. Include the small insider thing that makes it feel handled. Never write logistics meant for you rather than them — no "book two weeks ahead," no "confirm the reservation." Skip the note entirely rather than padding it.
 
+Mark each block with "kind": "stop" for somewhere the group is actually going — a restaurant, bar, activity, or experience. Everything else is "logistics": travel, check-in, checkout, luggage, getting ready, downtime, saying goodbye. A farewell or departure block is logistics even when it has a warm name; only mark it a stop if they're genuinely going somewhere, like a last brunch at a named restaurant.
+
+For "emoji", pick one that fits the moment. Use 🍽️ for dinners generally rather than a specific food — skip 🥩, 🍖 and similar.
+
 Respond with a single JSON object and nothing else:
-{"timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string}]}`;
+{"timeBlocks": [{"time": string, "activity": string, "venue": string, "notes": string, "emoji": string, "kind": "stop" | "logistics"}]}`;
 
           try {
             const day = await callClaude(dayPrompt, { maxTokens: 1200 });
@@ -2047,7 +2082,7 @@ Respond with a single JSON object and nothing else:
                   {(() => {
                     const list = parseEmails(emails);
                     const dayCount = itinerary?.days?.filter(d => d.timeBlocks?.length).length || 0;
-                    const stopCount = itinerary?.days?.reduce((n,d) => n + (d.timeBlocks?.length || 0), 0) || 0;
+                    const stopCount = countStops(itinerary);
                     if (!list.length) return null;
                     return (
                       <div className="send-summary">
