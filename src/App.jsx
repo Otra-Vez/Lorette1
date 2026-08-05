@@ -123,6 +123,17 @@ function countStops(itinerary) {
   );
 }
 
+// Claude sometimes returns "1:00 PM - 2:00 PM" instead of a single start time.
+// A schedule of start times reads better than a wall of ranges, so keep only
+// the first. Applied when the plan is stored, and again when the email is
+// rendered, so plans generated before this still come out clean.
+function startTimeOnly(time) {
+  if (!time) return time;
+  return String(time)
+    .split(/\s*(?:[-–—]|\bto\b|\buntil\b)\s*/i)[0]
+    .trim();
+}
+
 // Returns the booking options for a venue.
 function bookingLinks(tab, item, ctx) {
   const { city, checkIn, checkOut, guests } = ctx;
@@ -862,6 +873,7 @@ export default function App() {
   const [fillingDays, setFillingDays] = useState({});
   const [planBuilding, setPlanBuilding] = useState(false);
   const [emails, setEmails] = useState("");
+  const [hostEmail, setHostEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const [sendResult, setSendResult] = useState(null);
@@ -1062,6 +1074,8 @@ Keep activity names to 2 to 5 words. Notes are one or two sentences, 20 to 35 wo
 
 Mark each block with "kind": "stop" for somewhere the group is actually going — a restaurant, bar, activity, or experience. Everything else is "logistics": travel, check-in, checkout, luggage, getting ready, downtime, saying goodbye. A farewell or departure block is logistics even when it has a warm name; only mark it a stop if they're genuinely going somewhere, like a last brunch at a named restaurant.
 
+For "time", give a single start time like "7:30 PM" — not a range.
+
 For "emoji", pick one that fits the moment. Use 🍽️ for dinners generally rather than a specific food — skip 🥩, 🍖 and similar.
 
 Respond with a single JSON object and nothing else:
@@ -1069,7 +1083,9 @@ Respond with a single JSON object and nothing else:
 
           try {
             const day = await callClaude(dayPrompt, { maxTokens: 1200 });
-            const blocks = Array.isArray(day?.timeBlocks) ? day.timeBlocks : [];
+            const blocks = Array.isArray(day?.timeBlocks)
+              ? day.timeBlocks.map(b => ({ ...b, time: startTimeOnly(b.time) }))
+              : [];
             if (blocks.length) {
               filled++;
               setItinerary(prev => {
@@ -1125,14 +1141,21 @@ Respond with a single JSON object and nothing else:
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   async function sendInvites() {
-    const list = parseEmails(emails);
+    const guests = parseEmails(emails);
+    const host = hostEmail.trim();
     setSendError("");
 
-    if (!list.length) {
-      setSendError("Add at least one guest email first.");
+    // The host needs her own copy — she's the one who'll be referring back to
+    // this all weekend, and without it the plan only exists in this browser tab.
+    if (!host) {
+      setSendError("Add your own email first so you have a copy of the plan.");
       return;
     }
-    const bad = list.filter(e => !EMAIL_RE.test(e));
+    if (!EMAIL_RE.test(host)) {
+      setSendError("That doesn't look like a valid email address.");
+      return;
+    }
+    const bad = guests.filter(e => !EMAIL_RE.test(e));
     if (bad.length) {
       setSendError(`These don't look right: ${bad.join(", ")}`);
       return;
@@ -1141,6 +1164,9 @@ Respond with a single JSON object and nothing else:
       setSendError("There's no plan to send yet — build the weekend first.");
       return;
     }
+
+    // Host first, and de-duplicated in case she also listed herself below
+    const list = [host, ...guests.filter(e => e.toLowerCase() !== host.toLowerCase())];
 
     setSending(true);
     try {
@@ -1168,7 +1194,7 @@ Respond with a single JSON object and nothing else:
       }
       if (!resp.ok || data?.error) throw new Error(data?.error?.message || `Send failed (${resp.status})`);
 
-      setSendResult(data);
+      setSendResult({ ...data, guestCount: guests.length });
       setSent(true);
     } catch (e) {
       setSendError(e.message || "Couldn't send the invites.");
@@ -1391,6 +1417,18 @@ Respond with a single JSON object and nothing else:
         .day-pill .ed-input { background:var(--ink); color:#fff; border-color:rgba(255,255,255,0.5); }
 
         /* ── SEND ── */
+        .host-box {
+          background:rgba(124,58,237,0.04);
+          border:1.5px solid rgba(124,58,237,0.15);
+          border-radius:14px;
+          padding:1rem 1.1rem 1.1rem;
+          margin-bottom:1.1rem;
+        }
+        .host-hint {
+          font-size:0.78rem; color:var(--muted);
+          line-height:1.5; margin:0 0 0.6rem;
+        }
+
         .send-summary {
           background:rgba(124,58,237,0.05);
           border:1px solid rgba(124,58,237,0.12);
@@ -2133,22 +2171,48 @@ Respond with a single JSON object and nothing else:
               <p className="card-sub">Your guests get the full plan — every day, every stop, exactly as it reads here.</p>
               {!sent ? (
                 <>
-                  <div className="ig">
+                  <div className="host-box">
+                    <label className="il" style={{marginBottom:"0.3rem"}}>Your email</label>
+                    <p className="host-hint">
+                      You'll get a copy of the plan too — worth having when someone
+                      asks what time dinner is.
+                    </p>
+                    <input
+                      className="input"
+                      type="email"
+                      inputMode="email"
+                      autoComplete="email"
+                      placeholder="you@email.com"
+                      value={hostEmail}
+                      onChange={e=>{ setHostEmail(e.target.value); setSendError(""); }}
+                    />
+                  </div>
+
+                  <div className="ig" style={{opacity: hostEmail.trim() ? 1 : 0.45, transition:"opacity 0.2s"}}>
                     <label className="il">Guest emails</label>
                     <textarea className="input" style={{minHeight:"110px"}}
                       placeholder={"ashley@email.com\njessica@email.com\n(one per line or comma separated)"}
-                      value={emails} onChange={e=>{ setEmails(e.target.value); setSendError(""); }} />
+                      value={emails}
+                      disabled={!hostEmail.trim()}
+                      onChange={e=>{ setEmails(e.target.value); setSendError(""); }} />
+                    {!hostEmail.trim() && (
+                      <p className="host-hint" style={{marginTop:"0.4rem",marginBottom:0}}>
+                        Add your own email first.
+                      </p>
+                    )}
                   </div>
 
                   {(() => {
-                    const list = parseEmails(emails);
+                    const guests = parseEmails(emails);
+                    const total = guests.length + (hostEmail.trim() ? 1 : 0);
                     const dayCount = itinerary?.days?.filter(d => d.timeBlocks?.length).length || 0;
                     const stopCount = countStops(itinerary);
-                    if (!list.length) return null;
+                    if (!total) return null;
                     return (
                       <div className="send-summary">
                         <div className="send-summary-line">
-                          Sending to <strong>{list.length}</strong> guest{list.length===1?"":"s"}
+                          Sending to <strong>{total}</strong> {total===1?"person":"people"}
+                          {guests.length > 0 && hostEmail.trim() ? " (including you)" : ""}
                         </div>
                         <div className="send-summary-sub">
                           {dayCount} day{dayCount===1?"":"s"} · {stopCount} stop{stopCount===1?"":"s"}
@@ -2177,9 +2241,9 @@ Respond with a single JSON object and nothing else:
                     {sendResult?.sent === 1 ? "It's on its way." : "They're on their way."}
                   </div>
                   <p className="sent-sub">
-                    {sendResult?.sent
-                      ? `${sendResult.sent} guest${sendResult.sent===1?"":"s"} just got the plan.`
-                      : "Your guests just got the plan."}
+                    {sendResult?.guestCount
+                      ? `${sendResult.guestCount} guest${sendResult.guestCount===1?"":"s"} just got the plan, and there's a copy in your inbox.`
+                      : "There's a copy of the plan in your inbox."}
                     {" "}{details.brideName?`${details.brideName}'s`:"The"} weekend is locked in.
                   </p>
                   {sendResult?.failed?.length > 0 && (
@@ -2193,6 +2257,7 @@ Respond with a single JSON object and nothing else:
                     setSelected({dining:[],bars:[],stay:[],activities:[]});
                     setItinerary(null); setSent(false); setEmails("");
                     setSendResult(null); setSendError("");
+                    // hostEmail deliberately kept — same person, next trip
                     setTabErrors({}); setItinError(""); setActiveTab("dining");
                     // Without this the next trip thinks every tab is already loaded
                     cityRef.current = "";
