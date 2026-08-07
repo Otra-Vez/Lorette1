@@ -864,6 +864,7 @@ export default function App() {
   const inFlightRef = useRef({});
   const cityRef = useRef("");
   const reqIdRef = useRef({});
+  const detailsSigRef = useRef("");
   const [starFilter, setStarFilter] = useState([]);
   const [priceFilter, setPriceFilter] = useState([]);
   const [selected, setSelected] = useState({ dining:[], bars:[], stay:[], activities:[] });
@@ -907,16 +908,20 @@ export default function App() {
       setTabErrors(prev => ({ ...prev, [tab]: "" }));
       try {
         const result = await callClaude(
-          `Give me 6 real ${cat} in ${forCity} for a bachelorette weekend. Group size: ${details.groupSize || "8 to 12 guests"}.
+          `Give me 10 real ${cat} in ${forCity} for a bachelorette weekend. Group size: ${details.groupSize || "8 to 12 guests"}. Budget: ${details.budget}.
 
 ${VENUE_CRITERIA[tab]}
+${details.notes ? `
+What the bride is into, in her friend's words: "${details.notes}"
+
+Take this seriously — it outranks the general criteria above. If she's named a cuisine, a style, or something to avoid, every recommendation should respect it. If that leaves fewer than ten genuinely good options in ${forCity}, return fewer rather than padding the list with places that don't fit.` : ""}
 
 Before you answer, search the web to confirm each place is still open and operating. Permanent closures are the thing to catch — drop anything that has closed and replace it. Don't recommend a place you couldn't confirm.
 
-Return a JSON array. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array — no commentary, no citations.`,
+Return a JSON array. Give a real spread — across price points, neighbourhoods and types — rather than ten variations on the same idea. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array — no commentary, no citations.`,
           {
-            maxTokens: 4000,
-            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
+            maxTokens: 5000,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 12 }],
           }
         );
         if (!isCurrent()) return;
@@ -953,6 +958,7 @@ Return a JSON array. Each object: name, description (one short sentence, under 2
       setActiveTab("dining");
       loadedRef.current = {};
       inFlightRef.current = {};
+      detailsSigRef.current = "";
       // Invalidate anything still in flight for the old city
       for (const t of TABS) reqIdRef.current[t] = (reqIdRef.current[t] || 0) + 1;
     }
@@ -969,6 +975,20 @@ Return a JSON array. Each object: name, description (one short sentence, under 2
 
   async function handleDetailsSubmit() {
     setStep("explore");
+
+    // Notes and group size now shape which venues come back, so results from
+    // an earlier answer are stale. Refetch rather than show picks that ignore
+    // what she just told us.
+    const signature = `${details.notes}|${details.groupSize}|${details.budget}`;
+    if (detailsSigRef.current && detailsSigRef.current !== signature) {
+      loadedRef.current = {};
+      inFlightRef.current = {};
+      setExplore({ dining:[], bars:[], stay:[], activities:[] });
+      setTabErrors({});
+      for (const t of TABS) reqIdRef.current[t] = (reqIdRef.current[t] || 0) + 1;
+    }
+    detailsSigRef.current = signature;
+
     // Dining first so there's something on screen fast, then the rest one at
     // a time in the background. Firing all four at once trips API rate limits.
     for (const t of TABS) {
@@ -1863,6 +1883,9 @@ Respond with a single JSON object and nothing else:
               <div className="ig">
                 <label className="il">Vibe notes</label>
                 <textarea className="input" placeholder="Rooftop bars, no seafood, obsessed with live music…" value={details.notes} onChange={e => setDetails(p=>({...p,notes:e.target.value}))} />
+                <p className="host-hint" style={{marginTop:"0.4rem",marginBottom:0}}>
+                  Anything here shapes what we suggest — cuisines, dealbreakers, what she'd hate.
+                </p>
               </div>
               <div className="arow">
                 <button className="btn btn-ghost" onClick={() => setStep("destination")}>
@@ -2263,6 +2286,7 @@ Respond with a single JSON object and nothing else:
                     cityRef.current = "";
                     loadedRef.current = {};
                     inFlightRef.current = {};
+                    detailsSigRef.current = "";
                     for (const t of TABS) reqIdRef.current[t] = (reqIdRef.current[t] || 0) + 1;
                   }}>Plan another weekend</button>
                 </div>
