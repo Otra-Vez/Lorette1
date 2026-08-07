@@ -571,13 +571,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // proxy first; if it 404s, fall back to calling the API directly.
 let useDirectApi = false;
 
-async function postMessages({ system, messages, maxTokens, stream, tools }) {
+async function postMessages({ system, messages, maxTokens, stream, tools, cacheKey }) {
   if (!useDirectApi) {
     try {
       const resp = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, messages, max_tokens: maxTokens, stream, tools }),
+        body: JSON.stringify({ system, messages, max_tokens: maxTokens, stream, tools, cacheKey }),
       });
       // A real function replies with JSON or an event stream. Anything else
       // (an HTML shell, a 404 page) means the route isn't there — checking
@@ -790,7 +790,7 @@ async function callClaudeStreaming(prompt, { maxTokens = 4000, onPartial } = {})
   return final;
 }
 
-async function callClaude(prompt, { maxTokens = 4000, retries = 2, tools } = {}) {
+async function callClaude(prompt, { maxTokens = 4000, retries = 2, tools, cacheKey } = {}) {
   let lastError = new Error("Request failed");
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -801,6 +801,7 @@ async function callClaude(prompt, { maxTokens = 4000, retries = 2, tools } = {})
         messages: [{ role: 'user', content: prompt }],
         maxTokens,
         tools,
+        cacheKey,
       });
 
       const bodyText = await resp.text();
@@ -908,20 +909,26 @@ export default function App() {
       setTabErrors(prev => ({ ...prev, [tab]: "" }));
       try {
         const result = await callClaude(
-          `Give me 10 real ${cat} in ${forCity} for a bachelorette weekend. Group size: ${details.groupSize || "8 to 12 guests"}. Budget: ${details.budget}.
+          `Give me 8 real ${cat} in ${forCity} for a bachelorette weekend. Group size: ${details.groupSize || "8 to 12 guests"}. Budget: ${details.budget}.
 
 ${VENUE_CRITERIA[tab]}
 ${details.notes ? `
 What the bride is into, in her friend's words: "${details.notes}"
 
-Take this seriously — it outranks the general criteria above. If she's named a cuisine, a style, or something to avoid, every recommendation should respect it. If that leaves fewer than ten genuinely good options in ${forCity}, return fewer rather than padding the list with places that don't fit.` : ""}
+Take this seriously — it outranks the general criteria above. If she's named a cuisine, a style, or something to avoid, every recommendation should respect it. If that leaves fewer than eight genuinely good options in ${forCity}, return fewer rather than padding the list with places that don't fit.` : ""}
 
-Before you answer, search the web to confirm each place is still open and operating. Permanent closures are the thing to catch — drop anything that has closed and replace it. Don't recommend a place you couldn't confirm.
+Before you answer, search the web to confirm each place is still open and operating. Permanent closures are the thing to catch — drop anything that has closed and replace it with somewhere that fits. Never return a place you could not confirm is open.
 
-Return a JSON array. Give a real spread — across price points, neighbourhoods and types — rather than ten variations on the same idea. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array — no commentary, no citations.`,
+Return a JSON array. Give a real spread — across price points, neighbourhoods and types — rather than eight variations on the same idea. Each object: name, description (one short sentence, under 20 words, saying what makes it right for this group rather than generic praise), priceRange (1-4), ${tab==="stay"?"starRating (2-5),":"rating (1.0-5.0),"} neighborhood, mustTry (under 8 words). Return only the JSON array — no commentary, no citations.`,
           {
-            maxTokens: 5000,
-            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 12 }],
+            maxTokens: 4500,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 10 }],
+            // Personalised requests are one-offs — a "only seafood" list is no
+            // use to the next person. Everything else is the same answer for
+            // any group planning that city, so it's worth keeping.
+            cacheKey: details.notes?.trim()
+              ? undefined
+              : `venues:v1:${forCity.trim().toLowerCase()}:${tab}:${details.budget}`,
           }
         );
         if (!isCurrent()) return;
@@ -1002,6 +1009,7 @@ Return a JSON array. Give a real spread — across price points, neighbourhoods 
     // waits on the request already in flight instead of starting a second.
     if (!loadedRef.current[tab]) fetchTab(tab, cityRef.current);
   }
+
 
   function toggleSelect(tab, item) {
     setSelected(prev => {
