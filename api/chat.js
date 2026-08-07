@@ -4,6 +4,41 @@ export const config = {
   maxDuration: 60,
 };
 
+// Venue lists for a given city don't change hour to hour, and every fetch
+// costs real money — web searches are billed per search, and the results come
+// back as input tokens too. So a repeat request for the same city and category
+// is served from memory rather than paid for twice.
+//
+// This lives in the function instance, which Vercel keeps warm for a few
+// minutes and then discards. So it catches bursts — someone testing, or two
+// people planning Nashville the same afternoon — but not everything. A shared
+// store like Upstash would push the hit rate near 100%; the logic here is the
+// same either way, so that swap is small when it's worth making.
+const CACHE = new Map();
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // a day; venues don't move faster
+const CACHE_MAX = 200;                     // bounded so memory can't run away
+
+function cacheGet(key) {
+  const hit = CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CACHE_TTL_MS) {
+    CACHE.delete(key);
+    return null;
+  }
+  // Refresh recency so popular cities survive eviction
+  CACHE.delete(key);
+  CACHE.set(key, hit);
+  return hit.data;
+}
+
+function cacheSet(key, data) {
+  if (CACHE.size >= CACHE_MAX) {
+    // Map preserves insertion order, so the first key is the least recent
+    CACHE.delete(CACHE.keys().next().value);
+  }
+  CACHE.set(key, { at: Date.now(), data });
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: { message: 'Method not allowed' } });
@@ -13,7 +48,17 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: { message: 'Server is missing ANTHROPIC_API_KEY' } });
   }
 
-  const { messages, system, max_tokens, stream, tools } = req.body || {};
+  const { messages, system, max_tokens, stream, tools, cacheKey } = req.body || {};
+
+  // Only cacheable when the client says so — it knows whether this request is
+  // personalised. Streaming responses aren't cached; they're piped straight through.
+  if (cacheKey && !stream) {
+    const hit = cacheGet(cacheKey);
+    if (hit) {
+      res.setHeader('X-Lorette-Cache', 'hit');
+      return res.status(200).json(hit);
+    }
+  }
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -47,6 +92,11 @@ export default async function handler(req, res) {
 
     if (!stream) {
       const data = await response.json();
+      // Only cache a real answer — never an error or an empty turn
+      if (cacheKey && Array.isArray(data?.content) && data.content.length) {
+        cacheSet(cacheKey, data);
+      }
+      res.setHeader('X-Lorette-Cache', cacheKey ? 'miss' : 'skip');
       return res.status(200).json(data);
     }
 
